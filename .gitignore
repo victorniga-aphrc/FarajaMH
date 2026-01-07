@@ -3,3 +3,5 @@ __pycache__
 .env
 *Zone.Identifier
 farajamh-tts-key.json
+.venv/
+venv/
