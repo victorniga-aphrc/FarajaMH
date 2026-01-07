@@ -18,8 +18,8 @@ import webrtcvad
 from flask import Blueprint, request, jsonify, current_app as app
 from flask_wtf.csrf import CSRFProtect  # noqa: F401
 
-from google import genai
-from google.genai import types as genai_types
+import google.generativeai as genai
+from google.generativeai import types as genai_types
 
 from .. import csrf  # use app_pkg.csrf
 
