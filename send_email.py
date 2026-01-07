@@ -1,7 +1,13 @@
 from mailjet_rest import Client
+import os
 
-api_key = 'd4bb1d4e3e9cf0dc400ecd6fc7f5a821'
-api_secret = '6cc82143a5134b9baa79e0867fafcf69'
+from dotenv import load_dotenv
+load_dotenv()
+
+api_key = os.getenv('MAILJET_API_KEY')
+api_secret = os.getenv('MAILJET_API_SECRET')
+
+
 mailjet = Client(auth=(api_key, api_secret), version='v3.1')
 from flask import render_template
 
