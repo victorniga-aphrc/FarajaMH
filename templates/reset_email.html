@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-5">
+  <div class="row justify-content-center">
+    <div class="col-lg-5 col-md-7">
+      <div class="card shadow-sm border-0">
+        <div class="card-body">
+        <div id="auth-error" class="alert alert-danger d-none" role="alert"></div>
+
+          <h3 class="text-center text-primary mb-4">
+            <i class="fas fa-lock"></i> Verify Email Address
+          </h3>
+          <p class="text-muted text-center mb-4">
+            Enter your email address associated with your account.
+          </p>
+
+          <form id="resetEmailForm" data-url="{{ url_for('auth.password_reset_request') }}">
+              <div class="mb-3">
+                  <label for="login-email" class="form-label">Email</label>
+                  <input type="email" id="reset-email" class="form-control" autocomplete="username" required>
+                </div>
+            <button type="submit" class="btn btn-success w-100">Submit</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

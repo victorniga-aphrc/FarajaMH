@@ -1,0 +1,38 @@
+# --- Git & build artifacts ---
+.git
+.gitignore
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.swp
+*.tmp
+*.bak
+*.db
+
+# --- Local environments ---
+.env
+.venv/
+venv/
+env/
+
+# --- Node or front-end build outputs ---
+node_modules/
+build/
+dist/
+
+# --- FAISS & data artifacts ---
+data/faiss/*.index
+data/faiss/*.pkl
+data/raw/
+data/processed/
+data/tmp/
+*.ipynb_checkpoints
+
+# --- Python notebooks cache ---
+*.ipynb_checkpoints
+
+# --- Docker/compose leftovers ---
+docker-compose.override.yml

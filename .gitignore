@@ -1,0 +1,5 @@
+__pycache__
+*.pyc
+.env
+*ZOne.Identifier
+farajamh-tts-key.json

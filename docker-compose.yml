@@ -1,0 +1,29 @@
+#version: "3.9"
+
+services:
+  web:
+    user: "0:0"
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: farajamh-web
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/app.db}
+      FLASK_ENV: production
+      DEBUG: "0"
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-.env}
+      FAISS_INDEX_PATH: ${FAISS_INDEX_PATH:-/app/data/faiss/mental_health_cases.index}
+      FAISS_METADATA_PATH: ${FAISS_METADATA_PATH:-/app/data/faiss/mental_health_cases_metadata.pkl}
+      QUESTIONS_JSON_PATH: ${QUESTIONS_JSON_PATH:-/app/questions.json}
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data           # FAISS & artifacts
+      - dbdata:/data               # SQLite file (/data/app.db)
+    restart: unless-stopped
+
+volumes:
+  dbdata:
