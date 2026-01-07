@@ -21,7 +21,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TZ=Africa/Nairobi
 
 WORKDIR /app
-pip install google-genai
+
 
 # ---- Requirements ----
 COPY requirements.txt /app/requirements.txt
@@ -51,7 +51,8 @@ RUN printf '%s\n%s\n' \
 # Install Python deps
 RUN python -m pip install --upgrade pip && \
     pip install -r /app/requirements.linux.txt && \
-    pip install gunicorn gevent
+    pip install gunicorn gevent && \
+    pip install google-genai
 
 # ---- App code ----
 COPY . /app
