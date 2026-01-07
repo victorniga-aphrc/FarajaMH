@@ -10,9 +10,11 @@ from sqlalchemy import (
 from sqlalchemy.orm import (
     sessionmaker, declarative_base, relationship, scoped_session
 )
+import dotenv
+dotenv.load_dotenv()
 
 # DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://postgres:percy@localhost:5432/mhsdb")
-DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://mhs_admin:root@localhost:5432/mhsdb")
+DB_URL = os.getenv("DATABASE_URL")
 #in this case, host = localhost, username = postgres, port = 5432, password = percy, db name = mhsdb
 
 engine = create_engine(DB_URL, echo=False, future=True)
