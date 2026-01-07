@@ -13,7 +13,6 @@ __pycache__/
 *.db
 
 # --- Local environments ---
-.env
 .venv/
 venv/
 env/
