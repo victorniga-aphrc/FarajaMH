@@ -2,6 +2,8 @@
 
 services:
   web:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     user: "0:0"
     platform: linux/amd64
     build:
