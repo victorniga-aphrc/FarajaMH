@@ -17,6 +17,8 @@ services:
       SECRET_KEY: ${SECRET_KEY:-change-me-in-.env}
       MAILJET_API_KEY: ${MAILJET_API_KEY}
       MAILJET_API_SECRET: ${MAILJET_API_SECRET}
+      MAILJET_SENDER_EMAIL: ${MAILJET_SENDER_EMAIL}
+      MAILJET_SENDER_NAME: ${MAILJET_SENDER_NAME}
       FAISS_INDEX_PATH: ${FAISS_INDEX_PATH:-/app/data/faiss/mental_health_cases.index}
       FAISS_METADATA_PATH: ${FAISS_METADATA_PATH:-/app/data/faiss/mental_health_cases_metadata.pkl}
       QUESTIONS_JSON_PATH: ${QUESTIONS_JSON_PATH:-/app/questions.json}

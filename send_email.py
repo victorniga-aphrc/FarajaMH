@@ -7,7 +7,7 @@ load_dotenv()
 
 api_key = os.getenv('MAILJET_API_KEY')
 api_secret = os.getenv('MAILJET_API_SECRET')
-sender_email = os.getenv('MAILJET_SENDER_EMAIL', 'davienesh4@gmail.com')
+sender_email = os.getenv('MAILJET_SENDER_EMAIL')
 sender_name = os.getenv('MAILJET_SENDER_NAME', 'APHRC Faraja MH')
 
 MAILJET_ENABLED = bool(api_key and api_secret)
