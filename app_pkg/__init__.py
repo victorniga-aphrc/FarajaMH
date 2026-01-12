@@ -70,6 +70,12 @@ def create_app() -> Flask:
     from .routes.faiss_routes import faiss_bp
     from .routes.stt import stt_bp, register_ws_routes
 
+    # Exempt JSON auth API from CSRF to avoid 400s on POST
+    try:
+        csrf.exempt(auth_bp)
+    except Exception:
+        logger.exception("Failed to exempt auth blueprint from CSRF")
+
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(misc_bp)
