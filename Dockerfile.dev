@@ -45,5 +45,12 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
   CMD curl -fsS http://127.0.0.1:5000/ || exit 1
 
-# ---- Run with a Flask-Sock compatible worker ----
-CMD ["gunicorn", "-k", "gevent", "-w", "1", "-b", "0.0.0.0:5000", "app_pkg:create_app()"]
+CMD [\
+  "gunicorn", \
+  "--workers", "2", \
+  "--worker-class", "gevent", \
+  "--worker-tmp-dir", "/dev/shm", \
+  "--timeout", "180", \
+  "--bind", "0.0.0.0:5000", \
+  "app_pkg:create_app()" \ 
+]
