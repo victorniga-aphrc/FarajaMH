@@ -1,21 +1,27 @@
-from mailjet_rest import Client
 import os
-
+import logging
 from dotenv import load_dotenv
+from flask import render_template
+
 load_dotenv()
 
 api_key = os.getenv('MAILJET_API_KEY')
 api_secret = os.getenv('MAILJET_API_SECRET')
+sender_email = os.getenv('MAILJET_SENDER_EMAIL', 'davienesh4@gmail.com')
+sender_name = os.getenv('MAILJET_SENDER_NAME', 'APHRC Faraja MH')
 
+MAILJET_ENABLED = bool(api_key and api_secret)
+mailjet = None
 
-mailjet = Client(auth=(api_key, api_secret), version='v3.1')
-from flask import render_template
+if MAILJET_ENABLED:
+    try:
+        from mailjet_rest import Client
+        mailjet = Client(auth=(api_key, api_secret), version='v3.1')
+    except Exception:
+        MAILJET_ENABLED = False
+
 
 def send_mail_with_html_file(recipient_email, subject, html_file_name, placeholders: dict):
-    sender_email = 'percy0.brown@gmail.com'
-    sender_name = 'APHRC MHS'
-
-    # Use Jinja to render HTML
     html_content = render_template(html_file_name, **placeholders)
 
     data = {
@@ -32,5 +38,13 @@ def send_mail_with_html_file(recipient_email, subject, html_file_name, placehold
         ]
     }
 
-    result = mailjet.send.create(data=data)
-    return result.status_code, result.json()
+    if not MAILJET_ENABLED or mailjet is None:
+        logging.warning("Mailjet disabled or unavailable; mocking email send to %s", recipient_email)
+        return 200, {"ok": True, "mock": True, "to": recipient_email, "subject": subject}
+
+    try:
+        result = mailjet.send.create(data=data)
+        return result.status_code, result.json()
+    except Exception as e:
+        logging.exception("Email send failed: %s", e)
+        return 0, {"ok": False, "error": str(e)}
