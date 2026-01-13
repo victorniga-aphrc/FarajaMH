@@ -5,6 +5,7 @@ os.environ["TRANSFORMERS_NO_TORCHVISION"] = "1"
 from flask import Flask, send_from_directory, session
 from flask_wtf import CSRFProtect
 from flask_sock import Sock
+from .extensions import mail
 from dotenv import load_dotenv
 from flask_login import current_user
 
@@ -63,6 +64,7 @@ def create_app() -> Flask:
     login_manager.init_app(app)
     csrf.init_app(app)
     sock.init_app(app)
+    mail.init_app(app)
 
     # Blueprints
     from .routes.misc import misc_bp, register_error_handlers

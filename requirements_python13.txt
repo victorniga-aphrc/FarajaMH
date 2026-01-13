@@ -69,6 +69,7 @@ flask-sock==0.7.0
 Flask-SQLAlchemy==3.1.1
 Flask-WTF==1.2.2
 flatbuffers==25.2.10
+Flask-Mail==0.9.1
 fqdn==1.5.1
 frozenlist==1.7.0
 fsspec==2025.7.0
