@@ -1,4 +1,5 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app, url_for
+from urllib.parse import urljoin
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from models import SessionLocal, User, Role, OTP
 import random
@@ -143,8 +144,24 @@ def password_reset_request():
             })
 
         token = generate_reset_token(email)
-        base_url = request.host_url.rstrip('/')
-        reset_link = f"{base_url}/reset-password?token={token}"
+
+        reset_path = url_for('misc_bp.reset-password', token=token)
+        public_base = current_app.config.get("PUBLIC_BASE_URL")
+        forwarded_host = request.headers.get('X-Forwarded-Host')
+        forwarded_proto = request.headers.get('X-Forwarded-Proto')
+        forwarded_port = request.headers.get('X-Forwarded-Port')
+
+        if public_base:
+            reset_link = urljoin(public_base.rstrip('/') + '/', reset_path.lstrip('/'))
+        elif forwarded_host:
+            host = forwarded_host.split(',')[0].strip()
+            proto = forwarded_proto.split(',')[0].strip() if forwarded_proto else request.scheme
+            if forwarded_port and ':' not in host:
+                host = f"{host}:{forwarded_port.split(',')[0].strip()}"
+            base = f"{proto}://{host}"
+            reset_link = urljoin(base.rstrip('/') + '/', reset_path.lstrip('/'))
+        else:
+            reset_link = url_for('misc_bp.reset-password', token=token, _external=True)
 
         status, response = send_mail_with_html_file(
         recipient_email=email,

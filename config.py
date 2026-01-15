@@ -11,7 +11,7 @@ class Config:
     DEFAULT_SIMILARITY_THRESHOLD = 0.19
     MAX_QUESTIONS = 8
 
-   # Mail configuration
+    # Mail configuration
     MAIL_SERVER = os.getenv('MAIL_SERVER', 'localhost')
     MAIL_PORT = int(os.getenv('MAIL_PORT', 25))
     MAIL_USE_TLS = os.getenv('MAIL_USE_TLS', 'False') == 'True'
@@ -20,3 +20,6 @@ class Config:
     MAIL_PASSWORD = os.getenv('MAIL_PASSWORD')
     MAIL_DEFAULT_SENDER = os.getenv('MAIL_DEFAULT_SENDER', 'noreply@aphrc.org')
     MAIL_SUPPRESS_SEND = os.getenv('MAIL_SUPPRESS_SEND', 'False') == 'True'
+
+     # Public URL used in emails (e.g., https://app.example.com)
+    # PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL')
