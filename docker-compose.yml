@@ -32,25 +32,24 @@ services:
       FAISS_INDEX_PATH: ${FAISS_INDEX_PATH:-/app/data/faiss/mental_health_cases.index}
       FAISS_METADATA_PATH: ${FAISS_METADATA_PATH:-/app/data/faiss/mental_health_cases_metadata.pkl}
       QUESTIONS_JSON_PATH: ${QUESTIONS_JSON_PATH:-/app/questions.json}
-    ports:
-      - "8090:5000"
+    expose:
+      - "5000"
     volumes:
-      - ./data:/app/data           # FAISS & artifacts
-      - dbdata:/data               # SQLite file (/data/app.db)
+      - ./data:/app/data           # FAISS & artifacts             
     restart: unless-stopped
 
-  # reverse-proxy:
-  #   image: nginx:1.25-alpine
-  #   container_name: farajamh-proxy
-  #   depends_on:
-  #     - web
-  #   ports:
-  #     - "80:80"
-  #     - "8090:443"
-  #   volumes:
-  #     - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-  #     - ./deploy/nginx/certs:/etc/nginx/certs:rw
-  #   restart: unless-stopped
+  reverse-proxy:
+    image: nginx:1.25-alpine
+    container_name: farajamh-proxy
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/nginx/certs:/etc/nginx/certs:rw
+    restart: unless-stopped
 
 volumes:
   dbdata:
