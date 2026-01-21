@@ -155,6 +155,11 @@ def create_app() -> Flask:
         except Exception:
             pass
 
+    @app.after_request
+    def apply_security_headers(response):
+        response.headers.setdefault("Permissions-Policy", "microphone=(self)")
+        return response
+
     try:
         init_db()
     except Exception:
