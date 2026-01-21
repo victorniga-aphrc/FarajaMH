@@ -157,7 +157,8 @@ def create_app() -> Flask:
 
     @app.after_request
     def apply_security_headers(response):
-        response.headers.setdefault("Permissions-Policy", "microphone=(self)")
+        response.headers["Permissions-Policy"] = "microphone=(self)"
+        response.headers.setdefault("Feature-Policy", "microphone 'self'")
         return response
 
     try:
