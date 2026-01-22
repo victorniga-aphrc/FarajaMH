@@ -562,6 +562,10 @@ document.addEventListener("DOMContentLoaded", () => {
   on(recordBtn, "click", async () => {
     if (!mediaRecorder || mediaRecorder.state === "inactive") {
       try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          alert('Your browser does not support audio recording. Please use a modern browser or enable HTTPS.');
+          return;
+        }
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: { channelCount: 1, sampleRate: 48000, noiseSuppression: true, echoCancellation: true, autoGainControl: true }
         });
@@ -652,6 +656,10 @@ document.addEventListener("DOMContentLoaded", () => {
   async function startLive() {
     if (liveActive) return;
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Your browser does not support audio recording. Please use a modern browser or enable HTTPS.');
+        return;
+      }
       liveMediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
