@@ -8,7 +8,7 @@ import re
 # Optional semantic boost if the model is available; otherwise keywords only.
 try:
     from sentence_transformers import SentenceTransformer, util
-    _embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    _embedder = SentenceTransformer("models/all-MiniLM-L6-v2")
 except Exception:
     _embedder = None
 

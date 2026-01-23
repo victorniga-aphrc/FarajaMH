@@ -1,0 +1,8 @@
+__pycache__
+*.pyc
+.env
+*Zone.Identifier
+farajamh-tts-key.json
+.venv/
+venv/
+deploy/nginx/certs/*

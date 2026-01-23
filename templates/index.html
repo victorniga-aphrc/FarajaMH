@@ -15,6 +15,10 @@
     </div>
   </div>
 
+<div id="loader">
+  <div class="spinner"></div>
+</div>
+
   <!-- Auth Gate -->
   <div id="auth-gate" class="py-5">
     <div class="container">
@@ -36,7 +40,14 @@
                   <input type="password" id="login-password" class="form-control" autocomplete="current-password" required>
                 </div>
                 <button type="submit" class="btn btn-primary w-100">Log in</button>
+                  <!-- ★ Forgot Password Button -->
+                <div class="text-center mt-3" onclick="window.location='/reset-email';">
+                  <button class="btn btn-link p-0" id="forgotPasswordBtn">Forgot password?</button>
+                </div>
               </form>
+
+              <div class="g_id_signin" data-type="standard"></div>
+
               <div class="text-center mt-3">
                 <small class="text-muted">No account?</small>
                 <button class="btn btn-link p-0 align-baseline" data-action="show-signup">Create one</button>
@@ -59,6 +70,17 @@
                 </div>
                 <button type="submit" class="btn btn-success w-100">Sign up</button>
               </form>
+              <!-- OR separator -->
+              <div class="text-center my-3">OR</div>
+
+              <!-- Google Sign-In button -->
+              <div id="g_id_onload_signup"
+                  data-client_id="YOUR_GOOGLE_CLIENT_ID"
+                  data-callback="handleSignupGoogle"
+                  data-auto_prompt="false">
+              </div>
+              <div class="g_id_signin" data-type="standard"></div>
+
               <div class="text-center mt-3">
                 <small class="text-muted">Already have an account?</small>
                 <button class="btn btn-link p-0 align-baseline" data-action="show-login">Log in</button>
@@ -74,7 +96,7 @@
   <div id="app-wrapper" style="display:none;">
     <nav class="navbar navbar-expand-lg navbar-light bg-light rounded shadow-sm">
       <div class="container-fluid">
-        <a class="navbar-brand" href="#">Question-Recommender</a>
+        <a class="navbar-brand" id="questionRecommender" href="#">Question-Recommender</a>
         <div class="d-flex ms-auto align-items-center gap-3">
           <span id="whoami" class="navbar-text text-muted"></span>
         </div>
@@ -85,7 +107,7 @@
   {% if current_user.is_authenticated %}
 
   <!-- Question Bank -->
-  <div class="row mb-4">
+  <div class="row mb-4" id="questionBankSection">
     <div class="col-lg-15 mx-auto">
       <div class="card shadow-sm">
         <div class="card-body">
@@ -133,7 +155,7 @@
           <div class="container mt-2" id="agentsConversation">
 
             <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
-              <h2 class="m-0">Agents Conversation</h2>
+              <h2 class="m-0" id="agentsConversationHeader">Agents Conversation</h2>
 
               <div class="d-flex align-items-center gap-2 flex-wrap">
                 <label for="chatMode" class="form-label m-0">Mode</label>
@@ -207,18 +229,18 @@
                 </div>
               </div>
 
-              <div class="card shadow-sm mt-3">
+              <div class="card shadow-sm mt-3" id="suggestedQuestionSection">
                 <div class="card-header bg-light"><strong>Suggested Questions</strong></div>
                 <div class="card-body p-2">
                   <ul id="chatSuggestedQuestions" class="mb-0"></ul>
                 </div>
               </div>
 
-              <div class="d-flex justify-content-end mt-3">
-                <button type="button" id="finalizeBtn" class="btn btn-outline-primary">
-                  Summarize &amp; Final Plan
-                </button>
-              </div>
+<!--              <div class="d-flex justify-content-end mt-3" id="finalizationSection">-->
+<!--                <button type="button" id="finalizeBtn" class="btn btn-outline-primary">-->
+<!--                  Summarize &amp; Final Plan-->
+<!--                </button>-->
+<!--              </div>-->
             </div>
 
             <!-- Live (Mic) Pane -->
@@ -271,6 +293,12 @@
                 </div>
               </div>
             </div>
+            <!-- Summarize & Final Plan (visible for clinicians/admins only; JS hides for patients) -->
+<div class="d-flex justify-content-end mt-3" id="finalizationSection">
+  <button type="button" id="finalizeBtn" class="btn btn-outline-primary">
+    Summarize &amp; Final Plan
+  </button>
+</div>
 
             <!-- Unasked modal -->
             <div class="modal fade" id="unaskedModal" tabindex="-1" aria-hidden="true">

@@ -20,7 +20,7 @@ _has_case_search = False
 
 # Try CASES index first (MedicalCaseFAISS). If not available, try QUESTIONS index (MentalHealthQuestionsFAISS).
 try:
-    from medical_case_faiss import MedicalCaseFAISS as _CasesFAISS
+    from mental_health_faiss import MentalHealthQuestionsFAISS as _CasesFAISS
     _cases = _CasesFAISS()
     # Try common filename pairs
     for idx, meta in [
@@ -43,8 +43,8 @@ if faiss_system is None:
         _q = _QFAISS()
         # Try common questions filenames
         for idx, meta in [
-            ("mental_q.index", "mental_q_meta.pkl"),
-            ("questions.index", "questions_meta.pkl"),
+            ("mental_health_cases.index", "mental_health_cases_metadata.pkl")
+            # ("questions.index", "questions_meta.pkl"),
         ]:
             if os.path.exists(idx) and os.path.exists(meta):
                 _q.load_index(idx, meta)
@@ -65,7 +65,7 @@ def run_task(agent, input_text, name="Step"):
         tasks=[Task(
             name=name,
             description=input_text,
-            expected_output="Give your response as if you were in the middle of the diagnostic session.",
+            expected_output="Give your response as if you were in the middle of the screening session.",
             agent=agent
         )],
         verbose=False
@@ -128,78 +128,120 @@ def _case_snippet(r):
         return ""
 
 
-# ---------- Mode 1: Fully simulated ----------
-def simulate_agent_chat_stepwise(initial_message: str, turns: int = 6, language_mode: str = "bilingual", log_hook=None, session_id=None):
+# ---------- Mode 1: Fully simulated (now: clinician-only, patient is human) ----------
+def simulate_agent_chat_stepwise(
+    initial_message: str,
+    turns: int = 1,
+    language_mode: str = "bilingual",
+    conversation_history: list | None = None,
+    log_hook=None,
+    session_id=None,
+):
+    """
+    Simulated mode is now:
+      • Patient = real human (text or voice) – we just echo their message.
+      • Clinician = simulated via question_recommender + clinician_agent.
+      • Each call produces exactly ONE follow-up question from the clinician.
+
+    No LLM-generated patient replies anymore.
+    """
+
     llm = load_llm()
     agents = load_agents_from_yaml(AGENT_PATH, llm)
 
-    # Always emit the patient's seed
+    # Always emit the patient's seed (for display/logging)
     yield sse_message("Patient", initial_message, log_hook, session_id)
 
     # Retrieval context (only if we have a CASES index with search_similar_cases)
     similar_bullets = ""
     if faiss_system and _has_case_search:
         try:
-            similar_cases = faiss_system.search_similar_cases(initial_message, k=5, similarity_threshold=0.19) or []
+            similar_cases = faiss_system.search_similar_cases(
+                initial_message, k=5, similarity_threshold=0.19
+            ) or []
             similar_bullets = "\n".join(
-                f"- {getattr(r, 'case_id', 'case')}: {_case_snippet(r)} (sim={getattr(r, 'similarity_score', 0):.2f})"
+                f"- {getattr(r, 'case_id', 'case')}: {_case_snippet(r)} "
+                f"(sim={getattr(r, 'similarity_score', 0):.2f})"
                 for r in similar_cases if r
             )
         except Exception:
-            logger.exception("FAISS search failed during simulated mode; continuing without retrieval")
+            logger.exception(
+                "FAISS search failed during simulated mode; continuing without retrieval"
+            )
 
-    context_log = [f"Patient says: {initial_message}"]
+    # Build context from the conversation history + current patient line
+    history = conversation_history or []
+    context_log: list[str] = [
+        f"{m.get('role','')}: {m.get('message','')}" for m in history
+    ]
+    if initial_message:
+        context_log.append(f"Patient: {initial_message}")
+
     if similar_bullets:
         context_log.append("Similar cases (context):\n" + similar_bullets)
 
+    # We keep a 'turns' loop for backwards compatibility, but we only ever
+    # want one clinician question per HTTP call in this app flow.
     for turn in range(turns):
-        # question recommender
-        if language_mode == "english":
-            recommender_input = "\n".join(context_log) + "\n\nSuggest the next most relevant diagnostic question. Format: English: ..."
-        elif language_mode == "swahili":
-            recommender_input = "\n".join(context_log) + "\n\nPendekeza swali fupi la uchunguzi linalofuata. Format: Swahili: ..."
-        else:
-            recommender_input = "\n".join(context_log) + "\n\nSuggest the next most relevant bilingual question only. Format as:\nEnglish: ...\n\nSwahili: ..."
+        context_text = "\n".join(context_log)
 
-        recommended = run_task(agents["question_recommender_agent"], recommender_input, f"Question Suggestion {turn+1}")
+        # question recommender prompt
+        if language_mode == "english":
+            recommender_input = (
+                context_text
+                + "\n\nSuggest the next most relevant diagnostic question. Format: English: ..."
+            )
+        elif language_mode == "swahili":
+            recommender_input = (
+                context_text
+                + "\n\nPendekeza swali fupi la uchunguzi linalofuata. Format: Swahili: ..."
+            )
+        else:
+            recommender_input = (
+                context_text
+                + "\n\nSuggest the next most relevant bilingual question only. "
+                  "Format as:\nEnglish: ...\n\nSwahili: ..."
+            )
+
+        recommended = run_task(
+            agents["question_recommender_agent"],
+            recommender_input,
+            f"Question Suggestion {turn + 1}",
+        )
 
         if language_mode == "english":
             english_q, swahili_q = recommended.strip(), ""
         elif language_mode == "swahili":
             english_q, swahili_q = "", recommended.strip()
         else:
-            match = re.search(r"English:\s*(.+?)\n+Swahili:\s*(.+)", recommended, re.DOTALL)
+            match = re.search(
+                r"English:\s*(.+?)\n+Swahili:\s*(.+)",
+                recommended,
+                re.DOTALL,
+            )
             if match:
                 english_q, swahili_q = match.group(1).strip(), match.group(2).strip()
             else:
                 english_q, swahili_q = recommended.strip(), ""
 
-        plain_q = english_q if language_mode == "english" else (swahili_q if language_mode == "swahili" else f"{english_q}\n\n{swahili_q}")
+        # Plain question text (what the clinician "says" aloud)
+        if language_mode == "english":
+            plain_q = english_q
+        elif language_mode == "swahili":
+            plain_q = swahili_q
+        else:
+            plain_q = f"{english_q}\n\n{swahili_q}".strip()
 
+        # 1) Emit the recommender event (for UI question chips etc.)
         yield sse_recommender(english_q, swahili_q, log_hook, session_id)
+
+        # 2) Emit the clinician message – this is what your TTS reads out
         yield sse_message("Clinician", plain_q, log_hook, session_id)
         context_log.append(f"Clinician: {plain_q}")
 
-        # simulated patient reply
-        if language_mode == "english":
-            patient_input = f"Clinician: {english_q}\n\nRespond in English as the patient. Be short and realistic."
-        elif language_mode == "swahili":
-            patient_input = f"Clinician: {swahili_q}\n\nJibu kwa Kiswahili kama mgonjwa. Toa jibu fupi na halisi."
-        else:
-            patient_input = f"Clinician: English: {english_q} Swahili: {swahili_q}\n\nRespond as the patient. Answer both languages if possible. Be short and realistic."
+        # We only want one clinician question per patient utterance
+        break
 
-        patient_response = run_task(agents["patient_agent"], patient_input, f"Patient Response {turn+1}")
-        yield sse_message("Patient", patient_response, log_hook, session_id)
-        context_log.append(f"Patient: {patient_response}")
-
-    # Finalize
-    listener_input = "\n".join(context_log) + "\n\nSummarize the conversation in two parts:\n**English Summary:**\n- ...\n**Swahili Summary:**\n- ..."
-    listener_summary = run_task(agents["listener_agent"], listener_input, "Listener Summary")
-    yield sse_message("Listener", listener_summary, log_hook, session_id)
-
-    final_input = listener_input + "\n\nProvide a FINAL PLAN clearly structured as bullet points. Format like:\n**FINAL PLAN:**\n- Step 1: ...\n- Step 2: ..."
-    final_plan = run_task(agents["clinician_agent"], final_input, "Final Plan")
-    yield sse_message("Clinician", f"**FINAL PLAN:**\n\n{final_plan}", log_hook, session_id)
 
 
 # ---------- Mode 2: Real actors ----------
@@ -216,7 +258,11 @@ def real_actor_chat_stepwise(
     history = conversation_history or []
 
     if speaker_role.lower() == "finalize":
-        transcript_lines = [f"{m.get('role','')}: {m.get('message','')}" for m in history]
+        transcript_lines = [
+            f"{m.get('role', '')}: {m.get('message', '')}" for m in history
+            if (m.get('role', '') or '').lower() != 'finalize'
+               and (m.get('message', '') or '').strip() != '[Finalize]'
+        ]
         convo_text = "\n".join(transcript_lines)
 
         listener_input = convo_text + "\n\nSummarize the conversation in two parts:\n**English Summary:**\n- ...\n**Swahili Summary:**\n- ..."
@@ -283,10 +329,13 @@ def live_transcription_stream(
 
     # ---------- tiny per-session state ----------
     def _state_for(sid: str):
-        return _SUGGEST_STATE.setdefault(
-            sid or "default",
-            {"last_chars": 0, "last_ts": 0.0, "seen": set(), "buffer": []},
-        )
+        s = _SUGGEST_STATE.setdefault(sid or "default", {})
+        # repair older/partial states safely
+        s.setdefault("last_chars", 0)
+        s.setdefault("last_ts", 0.0)
+        s.setdefault("seen", set())
+        s.setdefault("buffer", [])
+        return s
 
     # ---------- helpers (light, local) ----------
     def _is_backchannel(t: str) -> bool:

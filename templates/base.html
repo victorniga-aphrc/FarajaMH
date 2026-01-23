@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="theme-color" content="#0d6efd" />
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+
   <title>{% block title %}Mental Health Screening App{% endblock %}</title>
 
   <!-- Favicon -->
@@ -15,6 +17,8 @@
   <!-- Bootstrap & Icons -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet" />
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet" />
+
+
 
   <!-- Custom CSS -->
   <link href="{{ url_for('static', filename='css/styles.css') }}" rel="stylesheet" />
@@ -36,16 +40,29 @@
       <div id="navbarNav" class="collapse navbar-collapse">
         <ul class="navbar-nav ms-auto align-items-lg-center">
           <li class="nav-item">
-            <a class="nav-link" href="{{ url_for('index') }}"><i class="fas fa-magnifying-glass me-1"></i>Search</a>
+            <a class="nav-link" href="{{ url_for('index') }}"><i class="fas fa-home me-1"></i>Home</a>
           </li>
 <!--          <li class="nav-item">-->
 <!--            <a class="nav-link" href="{{ url_for('health_check') }}"><i class="fas fa-heartbeat me-1"></i>Health</a>-->
 <!--          </li>-->
+
           <li class="nav-item">
             {% if current_user.is_authenticated %}
               {% for role in current_user.roles %}
                 {% if role.name == "admin" %}
-                  <a class="nav-link" href="{{ url_for('admin_page') }}"><i class="fas fa-shield-halved me-1"></i>Admin Dashboard</a>
+                  <a class="nav-link" href="{{ url_for('admin_page') }}"><i class="fas fa-shield-halved me-1"></i>Dashboard</a>
+                {% endif %}
+                {% if role.name == "clinician" %}
+                  <a class="nav-link" href="{{ url_for('clinician_dashboard') }}"><i class="fas fa-shield-halved me-1"></i>Dashboard</a>
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+          </li>
+            <li class="nav-item">
+            {% if current_user.is_authenticated %}
+              {% for role in current_user.roles %}
+                {% if role.name == "admin" %}
+                  <a class="nav-link" href="{{ url_for('clinicians') }}"><i class="fas fa-user-md me-1"></i>Clinicians</a>
                 {% endif %}
               {% endfor %}
             {% endif %}
@@ -84,7 +101,7 @@
   </main>
 
   <!-- Footer -->
-  <footer class="border-top py-4 mt-5">
+  <footer id="footer" class="border-top py-4 mt-5" style="display:none;">
     <div class="container d-flex flex-column flex-md-row align-items-start justify-content-between gap-3">
       <div>
         <div class="d-flex align-items-center mb-1">
@@ -133,8 +150,11 @@
       });
     })();
   </script>
-  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+
   {% block extra_js %}{% endblock %}
 </body>
+
 </html>

@@ -76,42 +76,22 @@
       </div>
       <div class="card-body p-0">
         <table class="table table-sm align-middle mb-0" id="tbl-convos">
-          <thead class="table-light"><tr><th>ID</th><th>Clinician</th><th>Created</th><th></th></tr></thead>
+          <thead class="table-light"><tr><th>ID</th><th>Owner</th><th>Created</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
     </div>
 
-    <div id="conv-detail" class="mt-4"></div>
+   <div id="conv-detail" class="mt-4"></div>
 
     <!-- Global Symptoms -->
-    <div class="card shadow-sm mt-4 border-0">
-      <div class="card-header bg-white"><strong>Symptoms (Global Tally)</strong></div>
-      <div class="card-body"><canvas id="chart-symptoms" height="160"></canvas></div>
-    </div>
+    <div class="card-header bg-white"><strong>Symptoms (Global Tally)</strong></div>
+    <div id="symptom-summary" class="mb-3"></div>
 
-    <!-- Per-Conversation Symptoms + Disease Likelihoods -->
-    <div class="row g-3 mt-1">
-      <div class="col-md-7">
-        <div class="card shadow-sm border-0">
-          <div class="card-header bg-white"><strong>Per Conversation — Top Symptoms</strong></div>
-          <div class="card-body p-0">
-            <table class="table table-sm align-middle mb-0" id="tbl-conv-symptoms">
-              <thead class="table-light"><tr><th>Clinician</th><th>Conversation</th><th>Top Symptoms</th><th></th></tr></thead>
-              <tbody id="tbl-conv-symptoms-body">
-                <tr><td colspan="4" class="text-muted">Loading…</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-      <div class="col-md-5">
-        <div class="card shadow-sm border-0">
-          <div class="card-header bg-white"><strong>Disease Likelihoods</strong></div>
-          <div class="card-body" id="conv-like-box">
-            <p class="text-muted mb-0">Select a conversation to view estimated likelihoods.</p>
-          </div>
-        </div>
+    <div class="card shadow-sm mt-4 border-0">
+
+      <div class="card-body">
+        <canvas id="chart-symptoms" height="160"></canvas>
       </div>
     </div>
 
@@ -120,5 +100,6 @@
 
 <!-- Scripts -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/wordcloud@1.2.2/src/wordcloud2.js"></script>
 <script src="{{ url_for('static', filename='js/admin.js') }}"></script>
 {% endblock %}

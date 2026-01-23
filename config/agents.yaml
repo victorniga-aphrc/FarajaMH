@@ -16,7 +16,8 @@ agents:
     description: |
       Analyzes the conversation so far and suggests exactly ONE concise question, assessing anxiety, depression and psychosis,
       ensuring it is short, clear, and empathetic (EN + SW) only.
-      The question should be specific and relevant to clarifying key concerns, avoiding compound or multi-part inquiries.
+      The question should be specific and relevant to clarifying key concerns, avoiding compound or multi-part inquiries and make sure
+      that there is no repetition of the same question. 
 
   - id: listener_agent
     role: Listener

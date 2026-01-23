@@ -1,10 +1,14 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app, url_for
+from urllib.parse import urljoin
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from models import SessionLocal, User, Role, user_roles
-from security import hash_password, verify_password
+from models import SessionLocal, User, Role, OTP
+import random
+from security import hash_password, verify_password, generate_reset_token, verify_reset_token
+from send_email import send_mail_with_html_file
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 login_manager = LoginManager()
+
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -16,11 +20,11 @@ def load_user(user_id):
 
 def grant_role(db, user: User, role_name: str):
     role = db.query(Role).filter_by(name=role_name).first()
-    if role and not any(r.id == role.id for r in user.roles):
-        db.execute(user_roles.insert().values(user_id=user.id, role_id=role.id))
+    if role and role not in user.roles:
+        user.roles.append(role)  # ORM handles the association table
         db.commit()
 
-@auth_bp.post("/signup")  # switch to invite-only later if you want
+@auth_bp.post("/signup")  # solely for patients now with email verification via otp
 def signup():
     data = request.get_json(force=True)
     email = (data.get("email") or "").strip().lower()
@@ -31,10 +35,28 @@ def signup():
     try:
         if db.query(User).filter_by(email=email).first():
             return jsonify({"ok": False, "error": "Email already registered"}), 409
-        u = User(email=email, password_hash=hash_password(password), email_verified=False)
-        db.add(u); db.commit()
-        grant_role(db, u, "clinician")
-        return jsonify({"ok": True})
+        u = User(email=email, password_hash=hash_password(password))
+        db.add(u)
+        db.commit()
+        db.refresh(u)  
+        u.roles = []     
+        grant_role(db, u, "patient")
+
+        otp_code = f"{random.randint(1000, 9999)}"
+        otp = OTP(user_id=u.id, otp_code=otp_code)
+        db.add(otp)
+        db.commit()
+        db.refresh(otp)
+
+        status, response = send_mail_with_html_file(
+        recipient_email=email,
+        subject="OTP Verification",
+        html_file_name="email_template.html",
+        placeholders={
+            "message": "Kindly use this OTP Code: " + otp_code}
+        )
+
+        return jsonify({"ok": True,  "email": u.email})
     finally:
         db.close()
 
@@ -49,7 +71,7 @@ def login():
         if not u or not verify_password(u.password_hash, password) or not u.is_active:
             return jsonify({"ok": False, "error": "Invalid credentials"}), 401
         login_user(u, remember=bool(data.get("remember")))
-        return jsonify({"ok": True, "user": {"email": u.email, "roles": [r.name for r in u.roles]}})
+        return jsonify({"ok": True, "user": {"email": u.email, "roles": [r.name for r in u.roles], "reset_password": u.reset_password}})
     finally:
         db.close()
 
@@ -64,3 +86,159 @@ def me():
     if not current_user.is_authenticated:
         return jsonify({"authenticated": False})
     return jsonify({"authenticated": True, "user": {"email": current_user.email, "roles": [r.name for r in current_user.roles]}})
+
+
+@auth_bp.post('/set-password')
+@login_required
+def set_new_password():
+    db = SessionLocal()
+    try:
+        data = request.get_json(force=True) or request.form
+        temp_password = data.get('temp_password', '').strip()
+        new_password = data.get('new_password', '').strip()
+        confirm_password = data.get('confirm_password', '').strip()
+
+        if not temp_password or not new_password or not confirm_password:
+            return jsonify({"ok": False, "error": "All fields are required"}), 400
+
+        if new_password != confirm_password:
+            return jsonify({"ok": False, "error": "Passwords do not match"}), 400
+
+        user = db.query(User).filter(User.id == current_user.id).first()
+        if not user:
+            return jsonify({"ok": False, "error": "User not found"}), 404
+
+        # Verify temp password
+        if not verify_password(current_user.password_hash, temp_password):
+            return jsonify({"ok": False, "error": "Temporary password is incorrect"}), 401
+
+        # Update password and flags
+        user.password_hash = hash_password(new_password)
+        user.reset_password = False
+        user.email_verified = True
+        user.is_active = True
+
+        db.commit()
+        logout_user()
+        return jsonify({"ok": True, "message": "Password updated successfully"})
+    finally:
+        db.close()
+
+
+@auth_bp.post('/password-reset-request')
+def password_reset_request():
+    db = SessionLocal()
+    try:
+        data = request.get_json(force=True) or request.form
+        email = data.get('email', '').strip()
+
+        if not email:
+            return jsonify({"ok": False, "error": "Email is required"}), 400
+
+        user = db.query(User).filter(User.email == email).first()
+
+        if not user:
+            return jsonify({
+                "ok": True,
+                "message": "If this email exists, a reset link will be sent."
+            })
+
+        token = generate_reset_token(email)
+
+        reset_path = url_for('misc_bp.reset-password', token=token)
+        public_base = current_app.config.get("PUBLIC_BASE_URL")
+        forwarded_host = request.headers.get('X-Forwarded-Host')
+        forwarded_proto = request.headers.get('X-Forwarded-Proto')
+        forwarded_port = request.headers.get('X-Forwarded-Port')
+
+        if public_base:
+            reset_link = urljoin(public_base.rstrip('/') + '/', reset_path.lstrip('/'))
+        elif forwarded_host:
+            host = forwarded_host.split(',')[0].strip()
+            proto = forwarded_proto.split(',')[0].strip() if forwarded_proto else request.scheme
+            if forwarded_port and ':' not in host:
+                host = f"{host}:{forwarded_port.split(',')[0].strip()}"
+            base = f"{proto}://{host}"
+            reset_link = urljoin(base.rstrip('/') + '/', reset_path.lstrip('/'))
+        else:
+            reset_link = url_for('misc_bp.reset-password', token=token, _external=True)
+
+        status, response = send_mail_with_html_file(
+        recipient_email=email,
+        subject="Reset Password",
+        html_file_name="password_link.html",
+        placeholders={
+            "message": "You have made a request to reset your password. Ignore the request if you did not authorise this action",
+            "reset_link": reset_link
+        }
+        )
+        return jsonify({
+            "ok": True,
+            "message": "Check your email for a link to reset password",
+        })
+    finally:
+        db.close()
+
+
+@auth_bp.post("/verify-otp")
+def verify_otp():
+    data = request.get_json(force=True)
+    email = data.get("email")
+    otp_code = data.get("otp_code")
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(email=email).first()
+        if not user:
+            return jsonify({"ok": False, "error": "User not found"}), 404
+
+        otp_entry = db.query(OTP).filter_by(user_id=user.id, otp_code=otp_code).first()
+        if otp_entry:
+            # OTP correct: verify user and delete OTP
+            user.email_verified = True
+            user.is_active = True
+
+            db.delete(otp_entry)
+            db.commit()
+            return jsonify({"ok": True, "message": "OTP Verified"})
+        else:
+            return jsonify({"ok": False, "error": "Invalid OTP"}), 400
+    finally:
+        db.close()
+
+
+@auth_bp.post('/confirm-reset-password')
+def confirm_reset_password():
+    db = SessionLocal()
+    try:
+        data = request.get_json(force=True) or request.form
+        token = data.get('token', '')
+        new_password = data.get('new_password', '').strip()
+        confirm_password = data.get('confirm_password', '').strip()
+
+        if not token or not new_password or not confirm_password:
+            return jsonify({"ok": False, "error": "All fields are required"}), 400
+
+        if new_password != confirm_password:
+            return jsonify({"ok": False, "error": "Passwords do not match"}), 400
+
+        email = verify_reset_token(token)
+        if not email:
+            return jsonify({"ok": False, "error": "Invalid or expired reset link"}), 400
+
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            return jsonify({"ok": False, "error": "User not found"}), 404
+
+        user.password_hash = hash_password(new_password)
+        user.is_active = True  
+        user.reset_password = False
+
+        db.commit()
+
+        return jsonify({
+            "ok": True,
+            "message": "Password reset successful"
+        })
+    finally:
+        db.close()

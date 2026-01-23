@@ -4,7 +4,9 @@ from flask_login import login_required, current_user
 from sqlalchemy import func, desc, or_
 from collections import Counter, defaultdict
 import re
-
+import string, random
+from security import hash_password
+from auth import grant_role
 from models import (
     SessionLocal,
     Conversation,
@@ -12,11 +14,11 @@ from models import (
     User,
     Role,
     user_roles,
-    ConversationOwner,
+    Institution,
 )
-
-# Optional: FAISS-driven disease likelihoods
-from mental_health_faiss import MentalHealthQuestionsFAISS
+from send_email import send_mail_with_html_file
+# Reuse the same screening logic used by /mh/screen
+from screening import run_screening, screening_to_dict
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -26,37 +28,27 @@ admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 def _require_admin():
     return current_user.is_authenticated and any(r.name == "admin" for r in current_user.roles)
 
+def _require_admin_clinician():
+    return current_user.is_authenticated and any(r.name == "clinician" or r.name == "admin" for r in current_user.roles)
+
 def admin_guard():
     if not _require_admin():
         return jsonify({"ok": False, "error": "Admin only"}), 403
+
+def admin_clinician_guard():
+    if not _require_admin_clinician():
+        return jsonify({"ok": False, "error": "Admin and Clinician only"}), 403
+
 
 # --------------------------
 # Helpers: text cleaning & symptom extraction
 # --------------------------
 # For pulling a single target symptom from recommender text (your existing heuristic)
-SYM_RE = re.compile(r"(?:symptom|target|focus)\s*:\s*([A-Za-z][\w\s/-]{1,80})", re.IGNORECASE)
 
-def _extract_symptom(text: str) -> str | None:
-    if not text:
-        return None
-    m = SYM_RE.search(text)
-    if m:
-        return m.group(1).strip()
-    for kw in (
-        "Sadness", "Loss of interest", "Irritability", "Hopelessness", "Guilt", "Mood swings",
-        "Worry", "Panic attacks", "Restlessness", "Muscle tension", "Avoidance", "Phobias", 
-        "Poor concentration", "Memory problems", "Racing thoughts", "Indecisiveness", "Rumination",
-        "Intrusive thoughts", "Hallucinations", "Delusions", "Disorganized thinking", "Derealization",
-        "Depersonalization", "Social withdrawal", "Sleep changes", "Appetite changes", "Reckless behavior",
-        "Aggression", "Self-harm", "Fatigue", "Headaches", "Gastrointestinal issues", "Palpitations",
-        "Weight changes", "Substance misuse", "Obsessions", "Compulsions", "Impaired functioning", "Emotional numbness"
-
-    ):
-        if kw in text.lower():
-            return kw
-    return None
-
-# Strip legacy HTML if any
+SYM_RE = re.compile(
+    r"(?:symptom|target|focus)\s*:\s*([A-Za-z][\w\s/-]{1,80}?)",
+    re.IGNORECASE
+)
 TAG_RE = re.compile(r"<[^>]+>")
 
 def _safe_text(m: Message) -> str:
@@ -71,7 +63,24 @@ SYMPTOM_LEXICON = [
     "Intrusive thoughts", "Hallucinations", "Delusions", "Disorganized thinking", "Derealization",
     "Depersonalization", "Social withdrawal", "Sleep changes", "Appetite changes", "Reckless behavior",
     "Aggression", "Self-harm", "Fatigue", "Headaches", "Gastrointestinal issues", "Palpitations",
-    "Weight changes", "Substance misuse", "Obsessions", "Compulsions", "Impaired functioning", "Emotional numbness"
+    "Weight changes", "Substance misuse", "Obsessions", "Compulsions", "Impaired functioning", "Emotional numbness",
+    "Anxious", "Depressed", "Sleepless nights","lost interest","no interest","lack of pleasure","nothing is enjoyable",
+    "feeling down","sad","depressed","blue","hopeless","helpless", "trouble sleeping","insomnia","sleeping too much",
+    "tired","fatigue","exhausted","drained","no energy","poor appetite","overeating","weight loss","weight gain",
+    "worthless","guilty","failure","self blame","ashamed", "trouble concentrating","hard to focus","mind is slow",
+    "moving slowly","slowed down","restless","fidgety", "suicidal","suicide","want to die","kill myself","end my life",
+    "self harm","self-harm","hurt myself","harm myself","cut myself", "crying a lot","tearful","weeping","breaking down",
+    "avoiding people","don’t want to see anyone","isolated","feel like a failure","not good enough","I am useless",
+    "worry a lot","cannot control worry","always worried","overthinking", "on edge","restless","uneasy","fidgety","nervous",
+    "mind goes blank","hard to focus","cannot concentrate", "irritable","short tempered","easily annoyed","snappy",
+    "muscle tension","tense","tight muscles","jaw clenching", "trouble sleeping","difficulty staying asleep",
+    "heart racing","palpitations","short of breath","chest tightness", "panic attack","suffocating", 
+    "stomach upset","nausea","sweating","shaking","trembling", "fear of leaving home","afraid of crowds","fear of public places",
+    "hearing voices","voices talking","voices commenting", "seeing things","visions","shadows moving",
+    "out to get me","people following me","being spied on","poisoned", "messages for me","TV talking to me","radio sending messages",
+    "thoughts mixed up","cannot think straight","speech disorganized", "strange behavior","acting odd","weird actions",
+    "people are watching me","they put cameras","spying on me", "lack of motivation","flat affect","emotionless","not talking",
+    "staring blankly","not moving","frozen","repetitive movements",
 ]
 CANON = {s: s for s in SYMPTOM_LEXICON}
 CANON.update({
@@ -87,28 +96,17 @@ CANON.update({
 
 def extract_symptoms(text: str) -> Counter:
     t = " " + (text or "").lower() + " "
+    t = t.translate(str.maketrans(string.punctuation, " "*len(string.punctuation)))
     counts = Counter()
     # phrase-first to catch multi-word entries
     for phrase in sorted(CANON.keys(), key=len, reverse=True):
-        pattern = r'\b' + re.escape(phrase) + r'\b'
-        hits = re.findall(pattern, t)
+        pattern = r'\b' + re.escape(phrase.lower()) + r'\b'
+        hits = re.findall(pattern, t, re.IGNORECASE)  # <-- ignore case
         if hits:
             counts[CANON[phrase]] += len(hits)
-            # remove to avoid double-counting overlaps
-            t = re.sub(pattern, " ", t)
-    return counts
+            t = re.sub(pattern, " ", t, flags=re.IGNORECASE)
 
-# Lazy FAISS loader for disease likelihoods
-_faiss = None
-def get_faiss():
-    global _faiss
-    if _faiss is None:
-        idx_path  = current_app.config.get('FAISS_INDEX_PATH', 'mental_health_questions.index')
-        meta_path = current_app.config.get('FAISS_METADATA_PATH', 'mental_health_questions_metadata.pkl')
-        f = MentalHealthQuestionsFAISS()
-        f.load_index(idx_path, meta_path)
-        _faiss = f
-    return _faiss
+    return counts
 
 # --------------------------
 # Overview stats
@@ -116,19 +114,26 @@ def get_faiss():
 @admin_bp.get("/api/summary")
 @login_required
 def summary():
-    if not _require_admin():
-        return admin_guard()
+    if not _require_admin_clinician():
+        return admin_clinician_guard()
 
     db = SessionLocal()
     try:
+        is_clinician = any(r.name == "clinician" for r in current_user.roles)
+
+        # -------------------------
+        # USERS (admins always see full counts)
+        # -------------------------
         total_users = db.query(User).count()
-        counselors = (
+
+        clinicians = (
             db.query(User)
               .join(user_roles, user_roles.c.user_id == User.id)
               .join(Role, Role.id == user_roles.c.role_id)
-              .filter(Role.name == "counselor")
+              .filter(Role.name == "clinician")
               .count()
         )
+
         admins = (
             db.query(User)
               .join(user_roles, user_roles.c.user_id == User.id)
@@ -136,90 +141,125 @@ def summary():
               .filter(Role.name == "admin")
               .count()
         )
-        total_convos = db.query(Conversation).count()
-        total_messages = db.query(Message).count()
-        actor_msgs = db.query(Message).filter(Message.role == "patient" or Message.role == "counselor").count()
-        rec_questions = db.query(Message).filter(Message.type == "question_recommender").count()
 
-        # Conversations per day (last 30 rows by date asc)
+        # -------------------------
+        # CONVERSATIONS (scoped)
+        # -------------------------
+        conv_q = db.query(Conversation)
+
+        if is_clinician:
+            conv_q = conv_q.filter(
+                Conversation.owner_user_id == current_user.id
+            )
+
+        total_convos = conv_q.count()
+
+        conv_ids_subq = conv_q.with_entities(Conversation.id).subquery()
+
+        # -------------------------
+        # MESSAGES (derived from conversations)
+        # -------------------------
+        msg_q = db.query(Message)
+
+        if is_clinician:
+            msg_q = msg_q.filter(
+                Message.conversation_id.in_(conv_ids_subq)
+            )
+
+        total_messages = msg_q.count()
+
+        rec_questions = msg_q.filter(
+            Message.type == "question_recommender"
+        ).count()
+
+        # -------------------------
+        # CONVERSATIONS PER DAY
+        # -------------------------
+        convs_per_day_q = (
+            db.query(
+                func.date(Conversation.created_at),
+                func.count(Conversation.id)
+            )
+        )
+
+        if is_clinician:
+            convs_per_day_q = convs_per_day_q.filter(
+                Conversation.owner_user_id == current_user.id
+            )
+
         convs_per_day = (
-            db.query(func.date(Conversation.created_at), func.count(Conversation.id))
-              .group_by(func.date(Conversation.created_at))
-              .order_by(func.date(Conversation.created_at))
-              .limit(30)
-              .all()
+            convs_per_day_q
+            .group_by(func.date(Conversation.created_at))
+            .order_by(func.date(Conversation.created_at))
+            .limit(30)
+            .all()
         )
 
-        # Top counselors by # of owned conversations
-        top_counselors = (
-            db.query(User.email, func.count(ConversationOwner.conversation_id))
-              .join(ConversationOwner, ConversationOwner.owner_user_id == User.id)
-              .group_by(User.email)
-              .order_by(desc(func.count(ConversationOwner.conversation_id)))
-              .limit(10)
-              .all()
-        )
 
-        # --- in admin.py -> summary()
+        top_clinicians = []
+
+        if not is_clinician:
+            # ADMIN ONLY
+            top_clinicians = (
+                db.query(
+                    User.email,
+                    func.count(Conversation.id).label("count")
+                )
+                .join(Conversation, Conversation.owner_user_id == User.id)
+                .join(user_roles, user_roles.c.user_id == User.id)
+                .join(Role, Role.id == user_roles.c.role_id)
+                .filter(Role.name == "clinician")
+                .group_by(User.email)
+                .order_by(desc("count"))
+                .limit(10)
+                .all()
+            )
+
         return jsonify({
             "ok": True,
             "users": {
                 "total": total_users,
-                "counselors": counselors,
-                "clinicians": counselors,  # ✅ add alias for the UI
+                "clinicians": clinicians,
                 "admins": admins
             },
-            "conversations": {"total": total_convos},
+            "conversations": {
+                "total": total_convos
+            },
             "messages": {
                 "total": total_messages,
-                "actor": actor_msgs,
                 "recommended": rec_questions
             },
             "series": {
-                "conversations_per_day": [[str(d), c] for d, c in convs_per_day],
-                "top_counselors": [{"email": e, "count": c} for e, c in top_counselors],
-            }
+                "conversations_per_day": [
+                    [str(d), c] for d, c in convs_per_day
+                ],
+                "top_clinicians": [
+                {"email": email, "count": count}
+                for email, count in top_clinicians
+                ]
+            },
         })
 
     finally:
         db.close()
 
-# --------------------------
-# List counselors (with conversation counts)
-# --------------------------
-@admin_bp.get("/api/counselors")
-@login_required
-def counselors():
-    if not _require_admin():
-        return admin_guard()
 
-    db = SessionLocal()
-    try:
-        rows = (
-            db.query(User.id, User.email, func.count(ConversationOwner.conversation_id).label("convos"))
-              .join(user_roles, user_roles.c.user_id == User.id)
-              .join(Role, Role.id == user_roles.c.role_id)
-              .filter(Role.name == "counselor")
-              .outerjoin(ConversationOwner, ConversationOwner.owner_user_id == User.id)
-              .group_by(User.id, User.email)
-              .order_by(desc("convos"))
-              .all()
-        )
-        return jsonify({"ok": True, "counselors": [
-            {"id": i, "email": e, "conversations": c} for i, e, c in rows
-        ]})
-    finally:
-        db.close()
 
 # --------------------------
 # Paginated conversations (includes owner email)
 # --------------------------
 # --- Paginated conversations (owner via conversations.owner_user_id) ---
+def _is_admin(user):
+    return any(r.name == "admin" for r in user.roles)
+
+def _is_clinician(user):
+    return any(r.name == "clinician" for r in user.roles)
+
 @admin_bp.get("/api/conversations")
 @login_required
 def conversations():
-    if not _require_admin():
-        return admin_guard()
+    if not _require_admin_clinician():
+        return admin_clinician_guard()
 
     page = int(request.args.get("page", 1))
     size = min(int(request.args.get("size", 20)), 100)
@@ -227,43 +267,80 @@ def conversations():
 
     db = SessionLocal()
     try:
-        total = db.query(Conversation).count()
-
-        rows = (
+        # Base query
+        base_query = (
             db.query(
                 Conversation.id,
                 Conversation.created_at,
-                User.email,                 # may be None
-                Conversation.owner_user_id  # may be None
+                User.email,
+                Conversation.owner_user_id
             )
             .outerjoin(User, User.id == Conversation.owner_user_id)
+        )
+
+        # ROLE FILTER
+        if _is_clinician(current_user):
+            base_query = base_query.filter(
+                Conversation.owner_user_id == current_user.id
+            )
+
+        total = base_query.count()
+
+        rows = (
+            base_query
             .order_by(Conversation.created_at.desc())
-            .offset(offset).limit(size)
+            .offset(offset)
+            .limit(size)
             .all()
         )
 
         convs = [{
             "id": cid,
             "created_at": created.isoformat(),
-            # convenience field for legacy UI: prefer email, then ID, else None
-            "owner": email or (str(owner_id) if owner_id is not None else None),
+            "owner": email or (str(owner_id) if owner_id else None),
             "owner_email": email,
             "owner_user_id": owner_id,
         } for (cid, created, email, owner_id) in rows]
 
-        return jsonify({"ok": True, "page": page, "size": size, "total": total, "conversations": convs})
+        return jsonify({
+            "ok": True,
+            "page": page,
+            "size": size,
+            "total": total,
+            "conversations": convs
+        })
+
     finally:
         db.close()
 
 
+
+def extract_final_english_summary(text):
+    """Return only the final English Summary block from a text."""
+    if not text:
+        return None
+
+    match = re.search(
+        r'(?:.*)(\*{0,2}English Summary:\*{0,2}.*?)(?=\*{0,2}Swahili Summary:|\Z)',
+        text,
+        flags=re.IGNORECASE | re.DOTALL
+    )
+
+    if match:
+        content = re.sub(r'^\*{0,2}English Summary:\*{0,2}', '', match.group(1), flags=re.IGNORECASE).strip()
+        return content
+
+    return None
+
+#
 # --------------------------
 # Conversation detail (messages + recommended questions)
 # --------------------------
 @admin_bp.get("/api/conversation/<cid>")
 @login_required
 def conversation_detail(cid):
-    if not _require_admin():
-        return admin_guard()
+    if not _require_admin_clinician():
+        return admin_clinician_guard()
 
     db = SessionLocal()
     try:
@@ -289,8 +366,8 @@ def conversation_detail(cid):
                 recos.append({
                     "id": m.id,
                     "question": text,
-                    "symptom": _extract_symptom(text)
                 })
+
 
         return jsonify({"ok": True, "messages": out_msgs, "recommended_questions": recos})
     finally:
@@ -302,13 +379,13 @@ def conversation_detail(cid):
 @admin_bp.get("/api/symptoms")
 @login_required
 def symptoms_api():
-    if not _require_admin():
-        return admin_guard()
+    if not _require_admin_clinician():
+        return admin_clinician_guard()
 
     db = SessionLocal()
     try:
-        # Pull all conversations + owners in one pass
-        convo_rows = (
+        # ---- Base conversation query ----
+        convo_q = (
             db.query(
                 Conversation.id,
                 Conversation.created_at,
@@ -316,78 +393,76 @@ def symptoms_api():
                 Conversation.owner_user_id,
             )
             .outerjoin(User, User.id == Conversation.owner_user_id)
+        )
+
+        # ROLE FILTER
+        if any(r.name == "clinician" for r in current_user.roles):
+            convo_q = convo_q.filter(
+                Conversation.owner_user_id == current_user.id
+            )
+
+        convo_rows = (
+            convo_q
             .order_by(Conversation.created_at.desc())
             .all()
         )
+
         conv_ids = [cid for (cid, _created, _email, _uid) in convo_rows]
 
-        owner_map = {
-            cid: {
-                "email": email,
-                "id": uid,
-                "created_at": created.isoformat(),
-            }
-            for (cid, created, email, uid) in convo_rows
-        }
-
-        # No conversations yet
+        # No conversations
         if not conv_ids:
             return jsonify({"ok": True, "global": {}, "by_conversation": []})
 
-        # Only patient utterances for counting (be forgiving on casing)
-        from sqlalchemy import or_
+        
         msgs = (
-            db.query(Message)
-              .filter(Message.conversation_id.in_(conv_ids))
-              .filter(or_(Message.role == "patient", Message.role == "Patient"))
-              .order_by(Message.created_at.asc())
-              .all()
-        )
-
-        from collections import Counter, defaultdict
-        global_counts = Counter()
-        per_conv = defaultdict(Counter)
+                    db.query(Message)
+                    .filter(Message.conversation_id.in_(conv_ids))
+                    .order_by(Message.created_at.asc())
+                    .all()
+                )
+        final_summary_by_conversation = {}
 
         for m in msgs:
-            counts = extract_symptoms(m.message or "")  # uses your helper defined above
-            global_counts.update(counts)
-            per_conv[m.conversation_id].update(counts)
+            if m.role != "Clinician":
+                continue
 
-        by_conv = []
-        for cid in conv_ids:
-            meta = owner_map.get(cid, {})
-            owner_email = meta.get("email")
-            owner_id = meta.get("id")
-            by_conv.append({
-                "conversation_id": cid,
-                # convenience + explicit fields
-                "owner": owner_email or (str(owner_id) if owner_id is not None else ""),
-                "owner_email": owner_email,
-                "owner_user_id": owner_id,
-                "created_at": meta.get("created_at"),
-                "symptoms": dict(per_conv[cid].most_common()),
-            })
+            text = _safe_text(m)
+            summary = extract_final_english_summary(text)
+
+            if summary:
+                # overwrite → keeps the final summary for that conversation
+                final_summary_by_conversation[m.conversation_id] = {
+                    "message_id": m.id,
+                    "timestamp": m.timestamp,
+                    "english_summary": summary
+                }
+
+
+        from collections import Counter
+        global_counts = Counter()
+
+        for conv_id, data in final_summary_by_conversation.items():
+            symptoms = extract_symptoms(data["english_summary"])
+            global_counts.update(symptoms)
 
         return jsonify({
             "ok": True,
             "global": dict(global_counts.most_common()),
-            "by_conversation": by_conv
+            "global_counts": global_counts,
+            "total_convos": len(conv_ids)
+            # "by_conversation": by_conv,
         })
+
     finally:
         db.close()
 
 
-# --------------------------
-# Disease likelihoods per conversation (FAISS-weighted)
-# --------------------------
-# --------------------------
-# Disease likelihoods per conversation (FAISS-weighted, questions index)
-# --------------------------
+
 @admin_bp.get("/api/conversation/<cid>/disease_likelihoods")
 @login_required
 def conversation_disease_likelihoods(cid):
-    if not _require_admin():
-        return admin_guard()
+    if not _require_admin_clinician():
+        return admin_clinician_guard()
 
     db = SessionLocal()
     try:
@@ -405,71 +480,127 @@ def conversation_disease_likelihoods(cid):
         if not patient_text:
             patient_text = " ".join((m.message or "") for m in msgs if m.message).strip()
 
-        f = get_faiss()  # MentalHealthQuestionsFAISS instance
+        # Use the SAME model path as /mh/screen
+        out = run_screening(transcript=patient_text, responses={}, safety_concerns=False)
+        data = screening_to_dict(out)
 
-        # If a cases index exists, use it; otherwise use questions index
-        if hasattr(f, "search_similar_cases"):
-            results = f.search_similar_cases(patient_text, k=8, similarity_threshold=0.05)
-            # Expecting results already bucketed—wrap to current response shape
-            ranked = sorted(
-                ({"disease": r["label"], "weight": float(r["score"])} for r in results),
-                key=lambda x: (-x["weight"], x["disease"])
-            )
-            total = sum(r["weight"] for r in ranked) or 1.0
-            top_diseases = [
-                {**r, "likelihood_pct": round(100.0 * r["weight"] / total, 1)}
-                for r in ranked[:5]
-            ]
-            faiss_matches = []  # cases search doesn't expose question rows
-        else:
-            # Questions FAISS flow
-            qhits = f.search(patient_text, k=20, threshold=0.05)
+        # Normalize to three percentages from confidences
+        conf = {r["name"]: float(r.get("confidence", 0.0)) for r in data.get("results", [])}
+        top_diseases = [
+            {"disease": "depression", "likelihood_pct": round(conf.get("depression", 0.0) * 100, 1)},
+            {"disease": "anxiety", "likelihood_pct": round(conf.get("anxiety", 0.0) * 100, 1)},
+            {"disease": "psychosis", "likelihood_pct": round(conf.get("psychosis", 0.0) * 100, 1)},
+        ]
 
-            from collections import defaultdict
-            weights = defaultdict(float)
-            labels = ("depression", "anxiety", "psychosis")
-            for r in qhits:
-                sim = max(float(r.similarity_score), 0.0)
-                cat = (r.category or "").strip().lower()
-                tags = [t.strip().lower() for t in (r.tags or [])]
-                for lab in labels:
-                    if cat == lab or lab in tags:
-                        weights[lab] += sim
+        final_summary_by_conversation = {}
 
-            # Light heuristic backoff if nothing matched
-            if not weights:
-                lt = patient_text.lower()
-                if any(w in lt for w in ("sad", "hopeless", "phq", "anhedonia", "self-harm", "suicid")):
-                    weights["depression"] += 0.4
-                if any(w in lt for w in ("worry", "panic", "gad", "tension", "restless", "phobia")):
-                    weights["anxiety"] += 0.4
-                if any(w in lt for w in ("hallucinat", "delusion", "voices", "thought disorder", "psychosis")):
-                    weights["psychosis"] += 0.4
+        for m in msgs:
+            if m.role != "Clinician":
+                continue
 
-            total = sum(weights.values()) or 1.0
-            top_diseases = sorted(
-                ({"disease": k, "weight": v, "likelihood_pct": round(100.0 * v / total, 1)} for k, v in weights.items()),
-                key=lambda x: (-x["weight"], x["disease"])
-            )[:5]
+            text = _safe_text(m)
+            summary = extract_final_english_summary(text)
 
-            faiss_matches = [{
-                "question_id": r.question_id,
-                "question": r.question,         # {"english", "swahili"}
-                "category": r.category,
-                "tags": r.tags,
-                "similarity": round(float(r.similarity_score), 4),
-            } for r in qhits]
+            if summary:
+                # overwrite → keeps the final summary for that conversation
+                final_summary_by_conversation[m.conversation_id] = {
+                    "message_id": m.id,
+                    "timestamp": m.timestamp,
+                    "english_summary": summary
+                }
 
-        # Symptom extraction (your project’s helper)
-        sym = extract_symptoms(patient_text)
+        from collections import Counter
+        sym = Counter()
+
+        for conv_id, data in final_summary_by_conversation.items():
+            symptoms = extract_symptoms(data["english_summary"])
+            sym.update(symptoms)
 
         return jsonify({
             "ok": True,
             "conversation_id": cid,
             "symptoms": dict(sym.most_common()),
             "top_diseases": top_diseases,
-            "faiss_matches": faiss_matches
+            "faiss_matches": [],  # optional: populate if you want to display matches
         })
     finally:
         db.close()
 
+
+def generate_temp_password(length=10):
+    chars = string.ascii_letters + string.digits + "!@#$%^&*"
+    return "".join(random.choice(chars) for _ in range(length))
+
+
+@admin_bp.post("/api/clinicians/add")
+@login_required
+def add_clinician():
+    if not _require_admin():
+        return admin_guard()
+
+    data = request.get_json(force=True) or request.form
+    db = SessionLocal()
+    try:
+        name = (data.get("name") or "").strip()
+        email = (data.get("email") or "").strip().lower()
+        institution_id = data.get("institution_id") or None
+        new_institution_name = data.get("new_institution") or None
+
+        # Determine final institution name
+        institution_name = new_institution_name.strip() if new_institution_name else None
+        if not institution_name and institution_id:
+            inst = db.query(Institution).filter_by(id=institution_id).first()
+            if inst:
+                institution_name = inst.name
+
+        if not name or not email or not institution_name:
+            return jsonify({"ok": False, "error": "All fields are required"}), 400
+
+        # Check if user exists
+        if db.query(User).filter_by(email=email).first():
+            return jsonify({"ok": False, "error": "User Email already registered"}), 409
+
+        # Find or create institution
+        inst = db.query(Institution).filter(func.lower(Institution.name) == institution_name.lower()).first()
+        if not inst:
+            inst = Institution(name=institution_name)
+            db.add(inst)
+            db.commit()
+            db.refresh(inst)
+
+        # Create user with temp password
+        temp_password = generate_temp_password()
+        user = User(
+            email=email,
+            password_hash=hash_password(temp_password),
+            name=name,
+            is_active=True,
+            institution_id=inst.id,
+            reset_password=True
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        # Assign clinician role
+        grant_role(db, user, "clinician")
+
+        status, response = send_mail_with_html_file(
+        recipient_email=email,
+        subject="Onboarding into MHS Application",
+        html_file_name="email_template.html",
+        placeholders={
+            "message": "Kindly use this temporary password: " + temp_password}
+        )
+
+        return jsonify({
+            "ok": True,
+            "clinician": {
+                "id": user.id,
+                "name": user.name,
+                "email": user.email,
+                "institution": inst.name,
+            }
+        })
+    finally:
+        db.close()

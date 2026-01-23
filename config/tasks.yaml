@@ -3,7 +3,7 @@ tasks:
     name: Question Recommender
     description: |
       Suggest the next most relevant question that assess anxiety, depression and psychosis
-      based on the ongoing conversation and similar cases.
+      based on the ongoing conversation and similar cases. Making sure that questions are not repeated.
     expected_output: |
       A single short question in the required format (English, Swahili, or bilingual).
     agent: question_recommender_agent

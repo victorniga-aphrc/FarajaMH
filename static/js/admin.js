@@ -22,11 +22,14 @@ function fmtDateTime(iso) {
 
 // ---- Renderers: existing KPIs/Charts/Tables ----
 function renderKPIs(sum) {
-  document.getElementById('kpi-users').textContent =
+  users_kpi = document.getElementById('kpi-users')
+  if (users_kpi){
+  users_kpi.textContent =
     `Total: ${sum.users.total} | Clinicians: ${sum.users.clinicians} | Admins: ${sum.users.admins}`;
+  }
+
   document.getElementById('kpi-convos').textContent = sum.conversations.total;
-  document.getElementById('kpi-messages').textContent =
-    `Total: ${sum.messages.total} (P:${sum.messages.patient} C:${sum.messages.clinician})`;
+  document.getElementById('kpi-messages').textContent = sum.messages.total;
   document.getElementById('kpi-reco').textContent = sum.messages.recommended;
 }
 
@@ -100,18 +103,36 @@ async function showConversation(cid) {
     symptom: q.symptom || null
   }));
 
+function formatBoldNewLines(text) {
+  return text
+    // 1️⃣ Convert **text** → new line + bold
+    .replace(/\*\*(.*?)\*\*/g, '<br><strong>$1</strong>')
+
+    // 2️⃣ Convert "- Step X:" into bold step headers on new lines
+    .replace(/-\s*(Step\s*\d+):/gi, '<br><strong>$1:</strong>')
+
+    // 3️⃣ Ensure each step description starts on its own line
+    .replace(/(<\/strong>)([^<])/g, '$1<br>$2')
+
+    // 4️⃣ Clean up leading breaks
+    .replace(/^<br>/, '');
+  }
+
+
+
   const msgList = msgs.map(m => `
     <li class="mb-2">
       <strong>${escapeHtml(m.role)}</strong>
       <small class="text-muted"> ${escapeHtml(m.timestamp || '')}</small><br/>
-      <span>${escapeHtml(m.text)}</span>
-    </li>`).join('');
+      <span>${formatBoldNewLines(escapeHtml(m.text))}</span>
+    </li>
+  `).join('');
+
 
   const recoList = recs.length
     ? recs.map(q => `
         <li class="mb-2">
           ${escapeHtml(q.question)}
-          ${q.symptom ? `<span class="badge bg-info text-dark ms-2">${escapeHtml(q.symptom)}</span>` : ''}
         </li>`).join('')
     : '<em>No recommended questions.</em>';
 
@@ -119,81 +140,175 @@ async function showConversation(cid) {
     <div class="card p-3">
       <h5 class="mb-3">Conversation ${escapeHtml(cid)}</h5>
       <div class="row">
+        <!-- Left column -->
         <div class="col-md-6">
           <h6>Transcript</h6>
-          <ul class="list-unstyled mb-0">${msgList}</ul>
+          <ul class="list-unstyled mb-0">
+            ${msgList}
+          </ul>
         </div>
+
+        <!-- Right column -->
         <div class="col-md-6">
           <h6>Recommended Questions</h6>
-          <ul class="list-unstyled mb-0">${recoList}</ul>
+          <ul class="list-unstyled mb-0">
+            ${recoList}
+          </ul>
+
+          <div class="mt-4">
+            <h6>Disease Likelihoods</h6>
+            <div class="card-body" id="conv-like-box">
+              <p class="text-muted mb-0">
+                Select a conversation to view estimated likelihoods.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
+
     </div>`;
 
+        // Show loading state
+    const box = document.getElementById('conv-like-box');
+    if (box) {
+      box.innerHTML = `<p class="text-muted mb-0">Loading likelihoods…</p>`;
+    }
+
+    // Fetch and render likelihoods
+    fetchAndShowLikelihoods(cid).catch(err => {
+      console.error(err);
+      if (box) {
+        box.innerHTML = `<p class="text-danger mb-0">
+          Failed to load disease likelihoods.
+        </p>`;
+      }});
   detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-// ---- NEW: Symptoms chart + per-conversation table + likelihoods ----
-let _symChart;
+
+function resizeCanvas(canvas) {
+  // Get the container width
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const dpi = window.devicePixelRatio || 1;
+
+  // Set canvas width/height in pixels (actual pixels, not CSS)
+  canvas.width = rect.width * dpi;
+  canvas.height = 300 * dpi; // desired height in pixels
+
+  // Set CSS to match container size
+  canvas.style.width = rect.width + "px";
+  canvas.style.height = "300px";
+
+  return dpi;
+}
+
+
+function renderGlobalSummary(symData) {
+  const container = document.getElementById('symptom-summary');
+  if (!container) return;
+
+  const totalConvos = symData.total_convos || 0;
+  const counts = symData.global_counts || {};
+
+  const entries = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1]);
+
+  let html = `
+    <div style="margin-bottom: 10px;">
+      <strong>Total Conversations:</strong> ${totalConvos}
+    </div>
+    <div>
+      <strong>Symptom Frequency:</strong>
+      <ul style="columns: 2; margin-top: 6px;">
+  `;
+
+  for (const [word, count] of entries) {
+    html += `<li><strong>${word}</strong>: ${count}</li>`;
+  }
+
+  html += `
+      </ul>
+    </div>
+  `;
+
+  container.innerHTML = html;
+}
+
+
 
 function renderGlobalSymptoms(symData) {
-  const ctx = document.getElementById('chart-symptoms');
-  if (!ctx) return;
+  const canvas = document.getElementById('chart-symptoms');
+  if (!canvas) return;
+
+  // Resize canvas for high-DPI / crispness
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const dpi = window.devicePixelRatio || 1;
+
+  canvas.width = rect.width * dpi;
+  canvas.height = 400 * dpi; // taller canvas
+  canvas.style.width = rect.width + "px";
+  canvas.style.height = "400px";
 
   const entries = Object.entries(symData.global || {});
-  const top = entries.slice(0, 20); // top 20
-  const labels = top.map(([k]) => k);
-  const counts = top.map(([, v]) => v);
+  if (!entries.length) return;
 
-  if (_symChart) _symChart.destroy();
-  _symChart = new Chart(ctx, {
-    type: 'bar',
-    data: { labels, datasets: [{ label: 'Symptom mentions (global)', data: counts }] },
-    options: {
-      responsive: true,
-      indexAxis: 'y',
-      scales: { x: { beginAtZero: true, ticks: { precision: 0 } } }
-    }
+  const list = entries
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 50)
+    .map(([word, count]) => [word, count]);
+
+  WordCloud(canvas, {
+    list,
+    gridSize: 10, // slightly bigger grid
+    weightFactor: function(size) {
+      return Math.max(20, size * 8); // increase size multiplier
+    },
+    fontFamily: 'Segoe UI, Arial, sans-serif',
+    color: 'random-dark',
+    backgroundColor: '#ffffff',
+    rotateRatio: 0.2, // more rotated words
+    rotationSteps: 2,
+    drawOutOfBound: false
   });
 }
 
-function renderPerConversationSymptoms(symData) {
-  const tbody = document.getElementById('tbl-conv-symptoms-body');
-  if (!tbody) return;
-  tbody.innerHTML = '';
-  (symData.by_conversation || []).forEach(row => {
-    const ownerTxt = row.owner_email
-      ? row.owner_email
-      : (row.owner_user_id != null ? String(row.owner_user_id)
-      : (row.owner ?? '—'));
 
-    const symList = Object.entries(row.symptoms || {}).slice(0, 5)
-      .map(([s, c]) => `${escapeHtml(s)} (${c})`).join(', ') || '—';
+// function renderPerConversationSymptoms(symData) {
+//   const tbody = document.getElementById('tbl-conv-symptoms-body');
+//   if (!tbody) return;
+//   tbody.innerHTML = '';
+//   (symData.by_conversation || []).forEach(row => {
+//     const ownerTxt = row.owner_email
+//       ? row.owner_email
+//       : (row.owner_user_id != null ? String(row.owner_user_id)
+//       : (row.owner ?? '—'));
 
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${escapeHtml(String(ownerTxt))}</td>
-      <td class="text-truncate" style="max-width:260px"><code>${escapeHtml(row.conversation_id)}</code></td>
-      <td>${symList}</td>
-      <td><button class="btn btn-sm btn-outline-primary" data-like="${escapeHtml(row.conversation_id)}">View</button></td>
-    `;
-    tbody.appendChild(tr);
-  });
-}
+//     const symList = Object.entries(row.symptoms || {}).slice(0, 5)
+//       .map(([s, c]) => `${escapeHtml(s)} (${c})`).join(', ') || '—';
+
+//     const tr = document.createElement('tr');
+//     tr.innerHTML = `
+//       <td>${escapeHtml(String(ownerTxt))}</td>
+//       <td class="text-truncate" style="max-width:260px"><code>${escapeHtml(row.conversation_id)}</code></td>
+//       <td>${symList}</td>
+//       <td><button class="btn btn-sm btn-outline-primary" data-like="${escapeHtml(row.conversation_id)}">View</button></td>
+//     `;
+//     tbody.appendChild(tr);
+//   });
+// }
 
 function renderLikelihoodPanel(cid, data) {
   const box = document.getElementById('conv-like-box');
   if (!box) return;
 
   const symptomList = Object.entries(data.symptoms || {})
-    .map(([s, c]) => `${escapeHtml(s)} (${c})`).join(', ') || '—';
+    .map(([s, c]) => `${escapeHtml(s)}`).join(', ')|| '—';
 
   const rows = (data.top_diseases || []).map(d => `
     <tr><td>${escapeHtml(d.disease)}</td><td>${d.likelihood_pct}%</td></tr>
   `).join('') || '<tr><td colspan="2" class="text-muted">No signal</td></tr>';
 
   box.innerHTML = `
-    <h6 class="mb-2">Conversation ${escapeHtml(cid)}</h6>
     <p><strong>Extracted symptoms:</strong> ${symptomList}</p>
     <table class="table table-sm mb-0">
       <thead><tr><th>Disease</th><th>Estimated likelihood</th></tr></thead>
@@ -252,8 +367,10 @@ async function adminInit() {
     // Symptoms data -> chart + per-conv table
     const sym = await getJSON('/admin/api/symptoms');
     if (sym.ok === false) throw new Error(sym.error || 'Symptoms failed');
+    renderGlobalSummary(sym)
     renderGlobalSymptoms(sym);
-    renderPerConversationSymptoms(sym);
+
+    // renderPerConversationSymptoms(sym);
 
     // Bind once
     document.getElementById('load-more')?.addEventListener('click', loadMoreConversations);
@@ -287,10 +404,81 @@ async function adminInit() {
 }
 
 // Run on /admin or /admin/ (tolerate trailing slash)
-if (location.pathname === '/admin' || location.pathname === '/admin/') {
+if (location.pathname === '/admin' || location.pathname === '/admin/' || 
+  location.pathname === '/clinician_dashboard' || location.pathname === '/clinician_dashboard/') {
   window.addEventListener('DOMContentLoaded', () => {
     if (window.__ADMIN_INIT_ATTACHED__) return; // prevent double-binding
     window.__ADMIN_INIT_ATTACHED__ = true;
     adminInit();
   });
 }
+
+
+
+const form = document.getElementById("addClinicianForm");
+
+form.addEventListener("submit", async function(e) {
+    e.preventDefault();
+
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData.entries());
+
+    const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+
+    const resp = await fetch(form.dataset.url, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": csrfToken
+
+        },
+        body: JSON.stringify(data)
+    });
+
+    const result = await resp.json();
+    if (result.ok) {
+        alert("Clinician Added, Invitation sent");
+        window.location.reload(); 
+
+    } else {
+      const el = $('auth-error');
+      if (el) {
+        el.textContent = result.error || 'Adding Clinician failed';
+        el.classList.remove('d-none');
+      }
+      // Optionally reload CSRF token if needed
+      await loadCsrf();
+    }
+});
+
+
+const toggleBtn = document.getElementById("toggleFormBtn");
+const formContainer = document.getElementById("clinicianFormContainer");
+const toggleIcon = document.getElementById("toggleIcon");
+
+toggleBtn.addEventListener("click", () => {
+    if (formContainer.style.display === "none" || formContainer.style.display === "") {
+        formContainer.style.display = "block";
+        toggleIcon.classList.remove("fa-chevron-down");
+        toggleIcon.classList.add("fa-chevron-up"); // indicate expanded
+    } else {
+        formContainer.style.display = "none";
+        toggleIcon.classList.remove("fa-chevron-up");
+        toggleIcon.classList.add("fa-chevron-down"); // indicate collapsed
+    }
+});
+
+const select = document.getElementById("institutionSelect");
+const input = document.getElementById("newInstitution");
+
+select.addEventListener("change", () => {
+  if (select.value) {
+    input.value = "";          // clear text input
+  }
+});
+
+input.addEventListener("input", () => {
+  if (input.value.trim() !== "") {
+    select.value = "";         // reset dropdown
+  }
+});

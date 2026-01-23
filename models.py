@@ -2,7 +2,7 @@
 import os
 import uuid as _uuid
 from datetime import datetime
-
+from security import hash_password
 from sqlalchemy import (
     create_engine, Column, String, Text, DateTime, ForeignKey, Integer,
     Boolean, Table, UniqueConstraint, JSON, Index, text
@@ -10,8 +10,12 @@ from sqlalchemy import (
 from sqlalchemy.orm import (
     sessionmaker, declarative_base, relationship, scoped_session
 )
+import dotenv
+dotenv.load_dotenv()
 
-DB_URL = os.getenv("DATABASE_URL", "sqlite:///app.db")
+# DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://postgres:percy@localhost:5432/mhsdb")
+DB_URL = os.getenv("DATABASE_URL")
+#in this case, host = localhost, username = postgres, port = 5432, password = percy, db name = mhsdb
 
 engine = create_engine(DB_URL, echo=False, future=True)
 SessionLocal = scoped_session(sessionmaker(bind=engine, autoflush=False, autocommit=False))
@@ -78,12 +82,18 @@ class ScreeningEvent(Base):
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
+    name = Column(String(255), nullable=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
-    is_active = Column(Boolean, default=True, nullable=False)
+    is_active = Column(Boolean, default=False, nullable=False)
     email_verified = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     roles = relationship("Role", secondary=user_roles, back_populates="users", lazy="joined")
+    # optional institution for clinician users
+    institution_id = Column(Integer, ForeignKey("institutions.id"), nullable=True)
+    institution = relationship("Institution", back_populates="clinicians")
+    reset_password = Column(Boolean, default=False, nullable=False)
+
     @property
     def is_authenticated(self): return True
     @property
@@ -91,6 +101,23 @@ class User(Base):
     def get_id(self): return str(self.id)
     def has_role(self, name: str) -> bool: return any(r.name == name for r in self.roles)
     def __repr__(self) -> str: return f"<User id={self.id} email={self.email}>"
+
+
+class OTP(Base):
+    __tablename__ = "otps"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    otp_code = Column(String(4), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class Institution(Base):
+    __tablename__ = "institutions"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), nullable=False)
+    clinicians = relationship("User", back_populates="institution")  # list of clinicians
+
 
 class Role(Base):
     __tablename__ = "roles"
@@ -107,38 +134,69 @@ class ConversationOwner(Base):
     def __repr__(self) -> str:
         return f"<ConversationOwner conv={self.conversation_id} owner={self.owner_user_id}>"
 
-def _seed_roles():
+
+def _seed_roles_admin():
     db = SessionLocal()
     try:
-        existing = {r.name for r in db.query(Role).all()}
-        for name in ("clinician", "admin"):
-            if name not in existing:
-                db.add(Role(name=name))
+        # print("Starting DB initialization...")
+        # Seed roles first
+        role_names = ["admin", "patient", "clinician"]
+        existing_roles = {r.name: r for r in db.query(Role).all()}
+        # print(f"Existing roles in DB: {list(existing_roles.keys())}")
+        for name in role_names:
+            if name not in existing_roles:
+                role = Role(name=name)
+                db.add(role)
+                existing_roles[name] = role
+                print(f"Added role: {name}")
         db.commit()
+        # print("Roles committed.")
+
+        # Seed admin user
+        admin_email = "test@admin.com"
+        admin_user = db.query(User).filter_by(email=admin_email).first()
+        if not admin_user:
+            admin_user = User(
+                email=admin_email,
+                password_hash=hash_password("adminpassword"),
+                is_active=True,
+                email_verified=True,
+            )
+            db.add(admin_user)
+            db.commit()  # commit so admin_user.id exists
+# '            print(f"Created admin user: {admin_email}")
+# '        else:
+#             print(f"Admin user already exists: {admin_email}")
+
+        # Assign admin role to the user
+        admin_role = existing_roles["admin"]
+        exists = db.execute(
+            user_roles.select().where(
+                (user_roles.c.user_id == admin_user.id) &
+                (user_roles.c.role_id == admin_role.id)
+            )
+        ).first()
+        if not exists:
+            db.execute(
+                user_roles.insert().values(
+                    user_id=admin_user.id,
+                    role_id=admin_role.id
+                )
+            )
+            db.commit()
+        #     print(f"Assigned 'admin' role to {admin_email}")
+        # else:
+        #     print(f"Admin role already assigned to {admin_email}")
+
+        # print("DB initialization completed successfully.")
+
     finally:
         db.close()
 
-def _auto_migrate_messages_sqlite():
-    """Add FAISS columns on SQLite if they don't exist (idempotent, safe)."""
-    if not DB_URL.startswith("sqlite"):
-        return
-    with engine.begin() as conn:
-        cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(messages);")}
-        alters = []
-        if "faiss_question_id" not in cols:
-            alters.append("ALTER TABLE messages ADD COLUMN faiss_question_id VARCHAR(128)")
-        if "faiss_category" not in cols:
-            alters.append("ALTER TABLE messages ADD COLUMN faiss_category VARCHAR(32)")
-        if "faiss_is_answer" not in cols:
-            alters.append("ALTER TABLE messages ADD COLUMN faiss_is_answer BOOLEAN DEFAULT 0 NOT NULL")
-        for sql in alters:
-            conn.exec_driver_sql(sql)
-
 def init_db():
-    """Create tables (first run) and ensure required columns exist."""
-    Base.metadata.create_all(bind=engine)
-    _auto_migrate_messages_sqlite()
-    _seed_roles()
+    """Just for seeding - Alembic handles all the postgres db migrations now"""
+    _seed_roles_admin()
+
 
 def create_conversation(owner_user_id: int | None = None) -> str:
     db = SessionLocal()

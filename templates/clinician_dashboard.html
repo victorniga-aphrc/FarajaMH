@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Clinician · Mental Health Screening App{% endblock %}
+{% block content %}
+<div class="container-fluid px-0">
+  <div class="container">
+    <div class="d-flex align-items-end justify-content-between flex-wrap gap-2 mt-3 mb-2">
+      <div>
+        <h2 class="mb-0">Clinician Dashboard</h2>
+        <div class="text-muted small">Welcome, {{ current_user.email }}</div>
+      </div>
+      <div id="admin-error" class="text-danger small" style="display:none;"></div>
+    </div>
+
+    <!-- KPIs -->
+    <div class="row g-3">
+      <div class="col-md-4">
+        <div class="card shadow-sm h-100 border-0 kpi">
+          <div class="card-body">
+            <div class="kpi-icon bg-success-subtle text-success"><i class="fa-solid fa-comments"></i></div>
+            <div class="kpi-title">Conversations</div>
+            <div id="kpi-convos" class="kpi-value">—</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card shadow-sm h-100 border-0 kpi">
+          <div class="card-body">
+            <div class="kpi-icon bg-warning-subtle text-warning"><i class="fa-solid fa-message"></i></div>
+            <div class="kpi-title">Messages</div>
+            <div id="kpi-messages" class="kpi-value">—</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card shadow-sm h-100 border-0 kpi">
+          <div class="card-body">
+            <div class="kpi-icon bg-info-subtle text-info"><i class="fa-solid fa-list-check"></i></div>
+            <div class="kpi-title">Recommended Qs</div>
+            <div id="kpi-reco" class="kpi-value">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Conversations per day -->
+    <div class="card shadow-sm mt-4 border-0">
+      <div class="card-header bg-white"><strong>Conversations per day (30d)</strong></div>
+      <div class="card-body"><canvas id="chart-convos" height="110"></canvas></div>
+    </div>
+
+
+    <!-- All conversations -->
+    <div class="card shadow-sm mt-4 border-0">
+      <div class="card-header bg-white d-flex align-items-center justify-content-between">
+        <strong>All Conversations</strong>
+        <button id="load-more" class="btn btn-outline-secondary btn-sm">Load more</button>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-sm align-middle mb-0" id="tbl-convos">
+          <thead class="table-light"><tr><th>ID</th><th>Owner</th><th>Created</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+   <div id="conv-detail" class="mt-4"></div>
+
+ <!-- Global Symptoms -->
+    <div class="card-header bg-white"><strong>Symptoms (Tally from all Your Conversations)</strong></div>
+    <div id="symptom-summary" class="mb-3"></div>
+
+    <div class="card shadow-sm mt-4 border-0">
+
+      <div class="card-body">
+        <canvas id="chart-symptoms" height="160"></canvas>
+      </div>
+    </div>
+
+
+  </div>
+</div>
+
+<!-- Scripts -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/wordcloud@1.2.2/src/wordcloud2.js"></script>
+<script src="{{ url_for('static', filename='js/admin.js') }}"></script>
+{% endblock %}
