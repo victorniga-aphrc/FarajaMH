@@ -6,3 +6,4 @@ farajamh-tts-key.json
 .venv/
 venv/
 deploy/nginx/certs/*
+models/
