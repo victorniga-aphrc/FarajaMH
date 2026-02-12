@@ -188,7 +188,55 @@ def _seed_roles_admin():
         # else:
         #     print(f"Admin role already assigned to {admin_email}")
 
-        # print("DB initialization completed successfully.")
+        # Seed README admin (admin@gmail.com / Admin123!) so docs and login match
+        readme_admin_email = "admin@gmail.com"
+        readme_admin = db.query(User).filter_by(email=readme_admin_email).first()
+        if not readme_admin:
+            readme_admin = User(
+                email=readme_admin_email,
+                password_hash=hash_password("Admin123!"),
+                is_active=True,
+                email_verified=True,
+            )
+            db.add(readme_admin)
+            db.commit()
+            db.refresh(readme_admin)
+        admin_role = existing_roles["admin"]
+        clinician_role = existing_roles.get("clinician")
+        for r in (admin_role, clinician_role):
+            if r is None:
+                continue
+            exists = db.execute(
+                user_roles.select().where(
+                    (user_roles.c.user_id == readme_admin.id) & (user_roles.c.role_id == r.id)
+                )
+            ).first()
+            if not exists:
+                db.execute(user_roles.insert().values(user_id=readme_admin.id, role_id=r.id))
+        db.commit()
+
+        # Seed README doctor (doctor1@gmail.com / Doctor1234)
+        doctor_email = "doctor1@gmail.com"
+        doctor_user = db.query(User).filter_by(email=doctor_email).first()
+        if not doctor_user:
+            doctor_user = User(
+                email=doctor_email,
+                password_hash=hash_password("Doctor1234"),
+                is_active=True,
+                email_verified=True,
+            )
+            db.add(doctor_user)
+            db.commit()
+            db.refresh(doctor_user)
+        if clinician_role:
+            exists = db.execute(
+                user_roles.select().where(
+                    (user_roles.c.user_id == doctor_user.id) & (user_roles.c.role_id == clinician_role.id)
+                )
+            ).first()
+            if not exists:
+                db.execute(user_roles.insert().values(user_id=doctor_user.id, role_id=clinician_role.id))
+                db.commit()
 
     finally:
         db.close()

@@ -641,9 +641,10 @@ document.addEventListener("DOMContentLoaded", () => {
 // ---------------------------------------------
 (() => {
   function wsURL(path) {
-    const base = new URL(window.location.origin);
-    base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${base.origin}${path.startsWith('/') ? path : '/' + path}`;
+    const fullPath = path.startsWith('/') ? path : '/' + path;
+    const url = new URL(fullPath, window.location.href);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    return url.href;
   }
 
   const qs = (id) => $(id);
@@ -703,7 +704,10 @@ document.addEventListener("DOMContentLoaded", () => {
         let j; try { j = JSON.parse(ev.data); } catch { return; }
 
         if (j.type === 'meter') {
-          const m = qs('liveMeter'); if (m) m.textContent = `in=${j.bytes_in}B pcm=${j.bytes_pcm}B`;
+          const m = qs('liveMeter');
+          if (m && (j.bytes_in != null || j.bytes_pcm != null)) {
+            m.textContent = `in=${j.bytes_in ?? 0}B pcm=${j.bytes_pcm ?? 0}B`;
+          }
           return;
         }
 

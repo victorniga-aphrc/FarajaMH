@@ -46,7 +46,8 @@
                 </div>
               </form>
 
-              <div class="g_id_signin" data-type="standard"></div>
+              <!-- Google Sign-In: uncomment and set data-client_id in base.html + call google.accounts.id.initialize() when ready -->
+              <!-- <div class="g_id_signin" data-type="standard"></div> -->
 
               <div class="text-center mt-3">
                 <small class="text-muted">No account?</small>
@@ -70,16 +71,11 @@
                 </div>
                 <button type="submit" class="btn btn-success w-100">Sign up</button>
               </form>
-              <!-- OR separator -->
-              <div class="text-center my-3">OR</div>
-
-              <!-- Google Sign-In button -->
-              <div id="g_id_onload_signup"
-                  data-client_id="YOUR_GOOGLE_CLIENT_ID"
-                  data-callback="handleSignupGoogle"
-                  data-auto_prompt="false">
-              </div>
-              <div class="g_id_signin" data-type="standard"></div>
+              <!-- OR separator (hidden until Google Sign-In is configured) -->
+              <!-- <div class="text-center my-3">OR</div> -->
+              <!-- Google Sign-In: set a real client_id and initialize() in JS to enable -->
+              <!-- <div id="g_id_onload_signup" data-client_id="YOUR_GOOGLE_CLIENT_ID" data-callback="handleSignupGoogle" data-auto_prompt="false"></div> -->
+              <!-- <div class="g_id_signin" data-type="standard"></div> -->
 
               <div class="text-center mt-3">
                 <small class="text-muted">Already have an account?</small>

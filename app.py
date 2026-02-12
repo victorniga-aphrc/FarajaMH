@@ -2,6 +2,13 @@ from __future__ import annotations
 
 # app.py — bootstrap Flask app
 
+# Gevent: patch before any other imports so ssl/urllib3/aiohttp are patched (avoids MonkeyPatchWarning with gunicorn -k gevent)
+try:
+    import gevent.monkey
+    gevent.monkey.patch_all()
+except ImportError:
+    pass
+
 import os
 
 # Tell transformers to skip torchvision-dependent features

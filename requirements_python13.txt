@@ -6,7 +6,7 @@ sentence-transformers==2.6.1
 huggingface_hub==0.20.3
 #transformers==4.38.2
 transformers==4.39.3
-tokenizers==0.15.2
+# tokenizers==0.15.2  # let transformers/chromadb choose a compatible tokenizers; pinned version not available on 3.12
 aiohappyeyeballs==2.6.1
 aiohttp==3.12.15
 aiosignal==1.4.0
@@ -21,7 +21,7 @@ arrow==1.3.0
 asttokens==3.0.0
 async-lru==2.0.5
 attrs==25.3.0
-audioop-lts==0.2.2
+# audioop-lts==0.2.2  # Python >=3.13 only; commented out for local 3.12 env
 auth0-python==4.10.0
 av==15.1.0
 babel==2.17.0
@@ -36,13 +36,13 @@ certifi==2025.7.14
 cffi==1.17.1
 cfgv==3.5.0
 charset-normalizer==3.4.2
-chromadb==1.0.20
+chromadb==1.0.20  # uses tokenizers but will follow whatever version pip resolves
 click==8.2.1
 colorama==0.4.6
 coloredlogs==15.0.1
 comm==0.2.3
 confluent-kafka==2.11.1
-crewai==0.126.0
+# crewai==0.126.0  # requires tokenizers>=0.20.3; commented out for now to avoid conflicts on 3.12
 cryptography==45.0.7
 ctranslate2==4.6.0
 dataclasses-json==0.6.7
@@ -119,15 +119,22 @@ jsonpointer==3.0.0
 jsonref==1.1.0
 jsonschema==4.25.0
 jsonschema-specifications==2025.4.1
-jupyter-events==0.12.0
-jupyter-lsp==2.2.6
-jupyter_client==8.6.3
-jupyter_core==5.8.1
-jupyter_server==2.16.0
-jupyter_server_terminals==0.5.3
-jupyterlab==4.4.5
-jupyterlab_pygments==0.3.0
-jupyterlab_server==2.27.3
+## --- Dev / notebook tooling (commented out by default; uncomment if needed) ---
+# jupyter-events==0.12.0
+# jupyter-lsp==2.2.6
+# jupyter_client==8.6.3
+# jupyter_core==5.8.1
+# jupyter_server==2.16.0
+# jupyter_server_terminals==0.5.3
+# jupyterlab==4.4.5
+# jupyterlab_pygments==0.3.0
+# jupyterlab_server==2.27.3
+# notebook==7.4.4
+# notebook_shim==0.2.4
+# nodeenv==1.10.0
+# pre_commit==4.5.1
+# virtualenv==20.35.4
+
 kubernetes==33.1.0
 langchain==0.3.27
 langchain-community==0.3.29

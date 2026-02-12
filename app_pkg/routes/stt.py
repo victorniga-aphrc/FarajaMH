@@ -23,11 +23,18 @@ from google.genai import types as genai_types
 
 from .. import csrf  # use app_pkg.csrf
 
+try:
+    from simple_websocket.errors import ConnectionClosed
+except ImportError:
+    ConnectionClosed = None  # type: ignore
+
 stt_bp = Blueprint("stt_bp", __name__)
 logger = logging.getLogger(__name__)
 
 # ----------- ENV / Defaults -----------
 
+# Google AI (Gemini) API key – required for speech-to-text. Get one at https://aistudio.google.com/apikey
+GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
 GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash").strip()
 
 SAMPLE_RATE             = int(os.getenv("SAMPLE_RATE", "16000"))
@@ -196,9 +203,13 @@ class GeminiTranscriber:
         with cls._lock:
             if cls._client is not None:
                 return cls._client
+            if not GEMINI_API_KEY:
+                raise ValueError(
+                    "GEMINI_API_KEY (or GOOGLE_API_KEY) not set. "
+                    "Add it to .env for speech-to-text. Get a key at https://aistudio.google.com/apikey"
+                )
             try:
-                # Reads key from GEMINI_API_KEY or GOOGLE_API_KEY
-                cls._client = genai.Client()
+                cls._client = genai.Client(api_key=GEMINI_API_KEY)
             except Exception:
                 logger.exception("Failed to initialize Gemini client")
                 raise
@@ -262,7 +273,11 @@ def register_ws_routes(sock):
             try:
                 import json
                 ws.send(json.dumps(obj))
-            except Exception:
+            except Exception as e:
+                # Normal client disconnect (e.g. user stopped mic) – don't log as error
+                if ConnectionClosed is not None and isinstance(e, ConnectionClosed):
+                    logger.debug("WS send_json skipped (client closed): %s", e)
+                    return
                 logger.exception("WS send_json failed")
 
         try:
@@ -275,6 +290,10 @@ def register_ws_routes(sock):
         ws_buf = b""
         stop = threading.Event()
         MIN_WEBSOCKET_CHUNK = 512
+
+        # Shared counters for meter (approximate; no lock for simplicity)
+        bytes_in_total = [0]  # list so ingest() can mutate
+        bytes_pcm_total = [0]  # main loop updates
 
         in_speech = False
         seg_buf = bytearray()
@@ -291,6 +310,7 @@ def register_ws_routes(sock):
                     pcm = job_q.get(timeout=0.25)
                 except queue.Empty:
                     continue
+                wav_path = None
                 try:
                     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
                         wav_path = tf.name
@@ -304,13 +324,15 @@ def register_ws_routes(sock):
                     text = _clean_text(text or "")
                     if text:
                         send_json({"type": "final", "text": text, "engine": engine})
-                except Exception:
-                    logging.exception("ASR worker failed")
+                except Exception as e:
+                    logger.exception("ASR worker failed")
+                    send_json({"type": "error", "message": f"Transcription failed: {e}"})
                 finally:
-                    try:
-                        os.unlink(wav_path)
-                    except Exception:
-                        pass
+                    if wav_path:
+                        try:
+                            os.unlink(wav_path)
+                        except Exception:
+                            pass
                     job_q.task_done()
 
         threading.Thread(target=worker, daemon=True).start()
@@ -325,6 +347,9 @@ def register_ws_routes(sock):
                         break
                     if isinstance(frame, str) or not frame:
                         continue
+                    n = len(frame) if isinstance(frame, (bytes, bytearray)) else 0
+                    if n:
+                        bytes_in_total[0] += n
                     ws_buf += frame
                     if len(ws_buf) >= MIN_WEBSOCKET_CHUNK:
                         try:
@@ -358,6 +383,7 @@ def register_ws_routes(sock):
                     chunk = b""
 
                 if chunk:
+                    bytes_pcm_total[0] += len(chunk)
                     ring.extend(chunk)
                     if len(ring) > RING_BYTES:
                         del ring[: -RING_BYTES]
@@ -434,7 +460,11 @@ def register_ws_routes(sock):
                             last_voiced_ts = None
 
                 if (time.time() - last_meter_ts) > 1.0:
-                    send_json({"type": "meter", "status": "ok"})
+                    send_json({
+                        "type": "meter",
+                        "bytes_in": bytes_in_total[0],
+                        "bytes_pcm": bytes_pcm_total[0],
+                    })
                     last_meter_ts = time.time()
 
                 time.sleep(0.005)

@@ -1,9 +1,11 @@
 __pycache__
 *.pyc
 .env
+local_app.db
 *Zone.Identifier
 farajamh-tts-key.json
 .venv/
 venv/
 deploy/nginx/certs/*
 models/
+GIT_SETUP_GUIDE.md
