@@ -32,6 +32,16 @@ def _ensure_qfaiss():
     return faiss_core.faiss_system
 
 
+def _ensure_conversation_id() -> str:
+    cid = session.get("conversation_id") or session.get("id")
+    if not cid:
+        cid = create_conversation(owner_user_id=current_user.id)
+    session["conversation_id"] = cid
+    session["id"] = cid
+    session.setdefault("conv", [])
+    return cid
+
+
 def _norm_cat(c):
     c = (c or "").strip().lower()
     return c if c in ("depression", "anxiety", "psychosis") else None
@@ -87,10 +97,7 @@ def faiss_suggest_question():
     q = results[0]
 
     # Ensure conversation exists
-    if not session.get("id"):
-        session["id"] = create_conversation(owner_user_id=current_user.id)
-        session["conv"] = []
-    sid = session["id"]
+    sid = _ensure_conversation_id()
 
     eng_text = (q.get("question", {}) or {}).get("english") or ""
     try:
@@ -126,10 +133,7 @@ def faiss_mark_answer():
     if not text:
         return jsonify({"error": "text is required"}), 400
 
-    if not session.get("id"):
-        session["id"] = create_conversation(owner_user_id=current_user.id)
-        session["conv"] = []
-    sid = session["id"]
+    sid = _ensure_conversation_id()
 
     qid, qcat = _pop_pending_faiss_q(sid)
 

@@ -9,3 +9,4 @@ venv/
 deploy/nginx/certs/*
 models/
 GIT_SETUP_GUIDE.md
+early_cancer_diagnosis/

@@ -153,12 +153,16 @@ def create_app() -> Flask:
     @app.before_request
     def ensure_conversation():
         try:
-            # migrate old key if present
+            # keep both keys in sync for backward compatibility
             if 'id' in session and 'conversation_id' not in session:
-                session['conversation_id'] = session.pop('id')
+                session['conversation_id'] = session['id']
+            if 'conversation_id' in session and 'id' not in session:
+                session['id'] = session['conversation_id']
 
             if current_user.is_authenticated and not session.get('conversation_id'):
-                session['conversation_id'] = create_conversation(owner_user_id=current_user.id)
+                cid = create_conversation(owner_user_id=current_user.id)
+                session['conversation_id'] = cid
+                session['id'] = cid
                 session['conv'] = []
         except Exception:
             pass

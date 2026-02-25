@@ -15,6 +15,7 @@ from models import (
     Role,
     user_roles,
     Institution,
+    delete_conversation_by_id,
 )
 from send_email import send_mail_with_html_file
 # Reuse the same screening logic used by /mh/screen
@@ -107,6 +108,26 @@ def extract_symptoms(text: str) -> Counter:
             t = re.sub(pattern, " ", t, flags=re.IGNORECASE)
 
     return counts
+
+
+def _display_name(username: str | None, name: str | None, email: str | None) -> str:
+    if username:
+        return username
+    if name:
+        return name
+    return (email or "").split("@")[0] if email else ""
+
+
+def _generate_unique_username(db, base: str) -> str:
+    candidate = re.sub(r"[^a-zA-Z0-9_]+", "_", (base or "").strip().lower()).strip("_") or "user"
+    if not db.query(User).filter(User.username == candidate).first():
+        return candidate
+    i = 2
+    while True:
+        c = f"{candidate}{i}"
+        if not db.query(User).filter(User.username == c).first():
+            return c
+        i += 1
 
 # --------------------------
 # Overview stats
@@ -203,13 +224,15 @@ def summary():
             top_clinicians = (
                 db.query(
                     User.email,
+                    User.username,
+                    User.name,
                     func.count(Conversation.id).label("count")
                 )
                 .join(Conversation, Conversation.owner_user_id == User.id)
                 .join(user_roles, user_roles.c.user_id == User.id)
                 .join(Role, Role.id == user_roles.c.role_id)
                 .filter(Role.name == "clinician")
-                .group_by(User.email)
+                .group_by(User.email, User.username, User.name)
                 .order_by(desc("count"))
                 .limit(10)
                 .all()
@@ -234,8 +257,8 @@ def summary():
                     [str(d), c] for d, c in convs_per_day
                 ],
                 "top_clinicians": [
-                {"email": email, "count": count}
-                for email, count in top_clinicians
+                {"email": email, "display_name": _display_name(username, name, email), "count": count}
+                for email, username, name, count in top_clinicians
                 ]
             },
         })
@@ -255,6 +278,17 @@ def _is_admin(user):
 def _is_clinician(user):
     return any(r.name == "clinician" for r in user.roles)
 
+
+def _conversation_allowed_for_current_user(db, cid: str):
+    convo = db.query(Conversation).filter(Conversation.id == cid).first()
+    if not convo:
+        return None
+    if _is_admin(current_user):
+        return convo
+    if _is_clinician(current_user) and convo.owner_user_id == current_user.id:
+        return convo
+    return None
+
 @admin_bp.get("/api/conversations")
 @login_required
 def conversations():
@@ -273,6 +307,8 @@ def conversations():
                 Conversation.id,
                 Conversation.created_at,
                 User.email,
+                User.username,
+                User.name,
                 Conversation.owner_user_id
             )
             .outerjoin(User, User.id == Conversation.owner_user_id)
@@ -297,10 +333,11 @@ def conversations():
         convs = [{
             "id": cid,
             "created_at": created.isoformat(),
-            "owner": email or (str(owner_id) if owner_id else None),
+            "owner": (username or name or email or (str(owner_id) if owner_id else None)),
             "owner_email": email,
+            "owner_display_name": (username or name or (email.split("@")[0] if email else None)),
             "owner_user_id": owner_id,
-        } for (cid, created, email, owner_id) in rows]
+        } for (cid, created, email, username, name, owner_id) in rows]
 
         return jsonify({
             "ok": True,
@@ -344,6 +381,10 @@ def conversation_detail(cid):
 
     db = SessionLocal()
     try:
+        allowed = _conversation_allowed_for_current_user(db, cid)
+        if not allowed:
+            return jsonify({"ok": False, "error": "Conversation not found"}), 404
+
         msgs = (
             db.query(Message)
               .filter(Message.conversation_id == cid)
@@ -466,6 +507,10 @@ def conversation_disease_likelihoods(cid):
 
     db = SessionLocal()
     try:
+        allowed = _conversation_allowed_for_current_user(db, cid)
+        if not allowed:
+            return jsonify({"ok": False, "error": "Conversation not found"}), 404
+
         msgs = (
             db.query(Message)
               .filter(Message.conversation_id == cid)
@@ -527,6 +572,33 @@ def conversation_disease_likelihoods(cid):
         db.close()
 
 
+@admin_bp.delete("/api/conversation/<cid>")
+@login_required
+def delete_conversation(cid):
+    if not _require_admin_clinician():
+        return admin_clinician_guard()
+    if _is_admin(current_user):
+        ok = delete_conversation_by_id(cid)
+    else:
+        db = SessionLocal()
+        try:
+            convo = db.query(Conversation).filter(
+                Conversation.id == cid,
+                Conversation.owner_user_id == current_user.id,
+            ).first()
+            if not convo:
+                return jsonify({"ok": False, "error": "Conversation not found"}), 404
+            db.delete(convo)
+            db.commit()
+            ok = True
+        finally:
+            db.close()
+
+    if not ok:
+        return jsonify({"ok": False, "error": "Conversation not found"}), 404
+    return jsonify({"ok": True, "conversation_id": cid})
+
+
 def generate_temp_password(length=10):
     chars = string.ascii_letters + string.digits + "!@#$%^&*"
     return "".join(random.choice(chars) for _ in range(length))
@@ -572,6 +644,7 @@ def add_clinician():
         temp_password = generate_temp_password()
         user = User(
             email=email,
+            username=_generate_unique_username(db, name or email.split("@")[0]),
             password_hash=hash_password(temp_password),
             name=name,
             is_active=True,

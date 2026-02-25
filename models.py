@@ -5,7 +5,7 @@ from datetime import datetime
 from security import hash_password
 from sqlalchemy import (
     create_engine, Column, String, Text, DateTime, ForeignKey, Integer,
-    Boolean, Table, UniqueConstraint, JSON, Index, text
+    Boolean, Table, UniqueConstraint, JSON, Index, text, func
 )
 from sqlalchemy.orm import (
     sessionmaker, declarative_base, relationship, scoped_session
@@ -83,6 +83,7 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=True)
+    username = Column(String(255), unique=True, nullable=True, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     is_active = Column(Boolean, default=False, nullable=False)
@@ -100,6 +101,14 @@ class User(Base):
     def is_anonymous(self): return False
     def get_id(self): return str(self.id)
     def has_role(self, name: str) -> bool: return any(r.name == name for r in self.roles)
+    @property
+    def display_name(self) -> str:
+        if self.username:
+            return self.username
+        if self.name:
+            return self.name
+        email_local = (self.email or "").split("@")[0].strip()
+        return email_local or self.email
     def __repr__(self) -> str: return f"<User id={self.id} email={self.email}>"
 
 
@@ -290,6 +299,94 @@ def list_conversations():
     db = SessionLocal()
     try:
         return db.query(Conversation).order_by(Conversation.created_at.desc()).all()
+    finally:
+        db.close()
+
+
+def list_conversations_for_user(user_id: int):
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(
+                Conversation.id,
+                Conversation.created_at,
+                func.count(Message.id).label("message_count"),
+            )
+            .outerjoin(Message, Message.conversation_id == Conversation.id)
+            .filter(Conversation.owner_user_id == user_id)
+            .group_by(Conversation.id, Conversation.created_at)
+            .order_by(Conversation.created_at.desc())
+            .all()
+        )
+
+        out = []
+        for cid, created_at, msg_count in rows:
+            latest = (
+                db.query(Message)
+                .filter(Message.conversation_id == cid, Message.message.isnot(None))
+                .order_by(Message.created_at.desc())
+                .first()
+            )
+            preview = (latest.message or "").strip() if latest else ""
+            if len(preview) > 160:
+                preview = preview[:160] + "..."
+            out.append(
+                {
+                    "id": cid,
+                    "created_at": created_at.isoformat() if created_at else None,
+                    "message_count": int(msg_count or 0),
+                    "preview": preview,
+                }
+            )
+        return out
+    finally:
+        db.close()
+
+
+def get_conversation_if_owned_by(conversation_id: str, user_id: int):
+    db = SessionLocal()
+    try:
+        return (
+            db.query(Conversation)
+            .filter(
+                Conversation.id == conversation_id,
+                Conversation.owner_user_id == user_id,
+            )
+            .first()
+        )
+    finally:
+        db.close()
+
+
+def delete_conversation_if_owned_by(conversation_id: str, user_id: int) -> bool:
+    db = SessionLocal()
+    try:
+        convo = (
+            db.query(Conversation)
+            .filter(
+                Conversation.id == conversation_id,
+                Conversation.owner_user_id == user_id,
+            )
+            .first()
+        )
+        if not convo:
+            return False
+        db.delete(convo)
+        db.commit()
+        return True
+    finally:
+        db.close()
+
+
+def delete_conversation_by_id(conversation_id: str) -> bool:
+    db = SessionLocal()
+    try:
+        convo = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+        if not convo:
+            return False
+        db.delete(convo)
+        db.commit()
+        return True
     finally:
         db.close()
 

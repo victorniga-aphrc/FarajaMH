@@ -3,7 +3,21 @@ from flask import Blueprint, jsonify, render_template, request, session, redirec
 from flask_login import login_required, current_user
 from .. import csrf
 from screening import run_screening, screening_to_dict
-from models import create_conversation, SessionLocal, User, Role, Institution, user_roles, ScreeningEvent,log_message
+from models import (
+    create_conversation,
+    SessionLocal,
+    User,
+    Role,
+    Institution,
+    user_roles,
+    ScreeningEvent,
+    log_message,
+    Conversation,
+    list_conversations_for_user,
+    get_conversation_messages,
+    get_conversation_if_owned_by,
+    delete_conversation_if_owned_by,
+)
 
 from sqlalchemy import desc
 from security import hash_password, verify_password
@@ -24,6 +38,16 @@ logger = logging.getLogger(__name__)
 from ..tts_engine import synthesize_speech_open
 
 misc_bp = Blueprint("misc_bp", __name__)
+
+
+def _get_or_create_conversation_id() -> str:
+    cid = session.get("conversation_id") or session.get("id")
+    if not cid:
+        cid = create_conversation(owner_user_id=current_user.id)
+    session["conversation_id"] = cid
+    session["id"] = cid
+    session.setdefault("conv", [])
+    return cid
 
 @misc_bp.get('/csrf-token')
 def get_csrf_token():
@@ -55,11 +79,14 @@ def admin_page():
 
 
 @misc_bp.post('/reset_conv')
+@csrf.exempt
 @login_required
 def reset_conv():
     session['conv'] = []
-    session['conversation_id'] = create_conversation(owner_user_id=current_user.id)
-    return jsonify({'ok': True, 'conversation_id': session['conversation_id']})
+    cid = create_conversation(owner_user_id=current_user.id)
+    session['conversation_id'] = cid
+    session['id'] = cid
+    return jsonify({'ok': True, 'conversation_id': cid})
 
 
 @misc_bp.post('/conv/log')
@@ -75,11 +102,7 @@ def conv_log():
     if len(text) > 8000:
         text = text[:8000] + " …[truncated]"
 
-    cid = session.get('conversation_id')
-    if not cid:
-        cid = create_conversation(owner_user_id=current_user.id)
-        session['conversation_id'] = cid
-        session['conv'] = []
+    cid = _get_or_create_conversation_id()
 
     log_message(
         cid,
@@ -109,11 +132,7 @@ def mh_screen():
     result = screening_to_dict(out)
 
     # Persist one ScreeningEvent row for this conversation (no user_id here)
-    cid = session.get('conversation_id')
-    if not cid:
-        cid = create_conversation(owner_user_id=current_user.id)
-        session['conversation_id'] = cid
-        session['conv'] = []
+    cid = _get_or_create_conversation_id()
 
     db = SessionLocal()
     try:
@@ -129,6 +148,73 @@ def mh_screen():
         db.close()
 
     return jsonify(result)
+
+
+@misc_bp.get("/history")
+@login_required
+def history_page():
+    return render_template("history.html")
+
+
+@misc_bp.get("/api/my-conversations")
+@login_required
+def api_my_conversations():
+    return jsonify({"ok": True, "conversations": list_conversations_for_user(current_user.id)})
+
+
+@misc_bp.get("/api/conversations/<cid>/messages")
+@login_required
+def api_conversation_messages(cid):
+    is_admin = any(r.name == "admin" for r in current_user.roles)
+    convo = get_conversation_if_owned_by(cid, current_user.id)
+    if convo is None and not is_admin:
+        return jsonify({"ok": False, "error": "Conversation not found"}), 404
+    if convo is None and is_admin:
+        db = SessionLocal()
+        try:
+            exists = db.query(Conversation.id).filter(Conversation.id == cid).first()
+        finally:
+            db.close()
+        if not exists:
+            return jsonify({"ok": False, "error": "Conversation not found"}), 404
+
+    msgs = get_conversation_messages(cid)
+    messages = [
+        {
+            "id": m.id,
+            "role": m.role,
+            "type": m.type,
+            "message": m.message,
+            "timestamp": m.timestamp,
+            "created_at": m.created_at.isoformat() if m.created_at else None,
+        }
+        for m in msgs
+    ]
+    return jsonify({"ok": True, "conversation_id": cid, "messages": messages})
+
+
+@misc_bp.delete("/api/conversations/<cid>")
+@csrf.exempt
+@login_required
+def api_delete_conversation(cid):
+    ok = delete_conversation_if_owned_by(cid, current_user.id)
+    if not ok:
+        return jsonify({"ok": False, "error": "Conversation not found"}), 404
+    if session.get("conversation_id") == cid or session.get("id") == cid:
+        session["conversation_id"] = create_conversation(owner_user_id=current_user.id)
+        session["id"] = session["conversation_id"]
+        session["conv"] = []
+    return jsonify({"ok": True, "conversation_id": cid})
+
+
+@misc_bp.get("/new_conversation")
+@login_required
+def new_conversation():
+    cid = create_conversation(owner_user_id=current_user.id)
+    session["conversation_id"] = cid
+    session["id"] = cid
+    session["conv"] = []
+    return redirect(url_for("index"))
 
 
 @misc_bp.post("/tts")

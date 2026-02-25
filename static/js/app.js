@@ -156,12 +156,8 @@ function showApp(user) {
 // ---------------------------------------------
 window.addEventListener('DOMContentLoaded', async () => {
   const loader = $('loader');
-  const gate = $('auth-gate');
-  const app = $('app-wrapper');
   const footer = $('footer');
-
-  if (gate) gate.style.display = 'none';
-  if (app) app.style.display = 'none';
+  // Initial visibility is set server-side from current_user so logged-in users don't see a login flash when navigating to Home
 
   try {
     await loadCsrf();
@@ -450,21 +446,21 @@ document.addEventListener("DOMContentLoaded", () => {
     es.onerror = () => es.close();
   });
 
-  // Reset conversation (+ live plan state)
-  on($("resetBtn"), "click", async () => {
+  // Shared: reset conversation server-side and clear transcript/suggested UI (used by Reset button and mode change)
+  window.resetConversationAndUI = async function () {
     try {
       const res1 = await fetch('/reset_conv', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': (window.CSRF_TOKEN || '') },
         credentials: 'same-origin'
       });
-      await fetch('/live/reset_plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': (window.CSRF_TOKEN || '') },
-        credentials: 'same-origin'
-      });
       const data1 = await res1.json();
       if (data1.ok) {
+        await fetch('/live/reset_plan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': (window.CSRF_TOKEN || '') },
+          credentials: 'same-origin'
+        });
         $("agentChatTranscript")?.replaceChildren();
         $("chatSuggestedQuestions")?.replaceChildren();
         $("liveTranscript")?.replaceChildren();
@@ -474,7 +470,9 @@ document.addEventListener("DOMContentLoaded", () => {
         $("mh-screening")?.replaceChildren();
       }
     } catch (err) { console.error('Reset error:', err); }
-  });
+  };
+
+  on($("resetBtn"), "click", () => { window.resetConversationAndUI(); });
 
   // Turn-based send (typed + voice-submitted transcription)
   on($("agentChatForm"), "submit", (e) => {
@@ -801,9 +799,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function stopLive() {
     try {
+      clearTimeout(window._liveStopTimeout);
       if (liveRecorder && liveRecorder.state === 'recording') liveRecorder.stop();
       if (liveMediaStream) liveMediaStream.getTracks().forEach(t => t.stop());
-      if (liveWS && liveWS.readyState === WebSocket.OPEN) liveWS.close(1000, 'stop');
+      // Send stop so server flushes and sends final transcript before we close (then wait for finals or 6s)
+      if (liveWS && liveWS.readyState === WebSocket.OPEN) {
+        const s = qs('liveStatus'); if (s) s.textContent = 'Stopping…';
+        try { liveWS.send(JSON.stringify({ type: 'stop' })); } catch (e) {}
+        window._liveStopTimeout = setTimeout(() => {
+          if (liveWS && liveWS.readyState === WebSocket.OPEN) liveWS.close(1000, 'stop');
+          stopLive();
+        }, 6000);
+        return;
+      }
+      if (liveWS) liveWS.close(1000, 'stop');
 
       // If user picked "final", auto trigger final suggestions at stop
       try {
@@ -858,6 +867,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (e.target.value === 'live') { hide(turn); show(live); }
       else { show(turn); hide(live); if (liveActive) stopLive(); }
     }
+    // New conversation per mode so Real Actors / Simulated / Live don't mix in one thread
+    if (window.resetConversationAndUI) window.resetConversationAndUI().catch(function () {});
   });
 })();
 

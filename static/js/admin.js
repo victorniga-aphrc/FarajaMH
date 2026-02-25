@@ -16,6 +16,20 @@ async function getJSON(url) {
   return r.json();
 }
 
+async function deleteJSON(url) {
+  const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") || "";
+  const r = await fetch(url, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: csrf ? { "X-CSRFToken": csrf } : {}
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || data.ok === false) {
+    throw new Error(data.error || `HTTP ${r.status}`);
+  }
+  return data;
+}
+
 function fmtDateTime(iso) {
   try { return new Date(iso).toLocaleString(); } catch { return iso || ''; }
 }
@@ -53,7 +67,8 @@ function renderTopCliniciansTable(sum) {
   tbodyClin.innerHTML = '';
   (sum.series?.top_clinicians || []).forEach(row => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${escapeHtml(row.email)}</td><td>${row.count}</td>`;
+    const label = row.display_name ? `${row.display_name} (${row.email})` : row.email;
+    tr.innerHTML = `<td>${escapeHtml(label)}</td><td>${row.count}</td>`;
     tbodyClin.appendChild(tr);
   });
 }
@@ -64,7 +79,7 @@ function renderConversationRows(conversations) {
   if (!tbody) return;
   conversations.forEach(c => {
     const ownerTxt = c.owner_email
-      ? c.owner_email
+      ? (c.owner_display_name ? `${c.owner_display_name} (${c.owner_email})` : c.owner_email)
       : (c.owner_user_id != null ? String(c.owner_user_id)
       : (c.owner ?? '-'));
 
@@ -73,7 +88,10 @@ function renderConversationRows(conversations) {
       <td class="text-truncate" style="max-width:260px">${escapeHtml(c.id)}</td>
       <td>${escapeHtml(String(ownerTxt))}</td>
       <td>${new Date(c.created_at).toLocaleString()}</td>
-      <td><button class="btn btn-sm btn-outline-primary" data-cid="${escapeHtml(c.id)}">View</button></td>
+      <td class="d-flex gap-1">
+        <button class="btn btn-sm btn-outline-primary" data-cid="${escapeHtml(c.id)}">View</button>
+        <button class="btn btn-sm btn-outline-danger" data-del-cid="${escapeHtml(c.id)}">Delete</button>
+      </td>
     `;
     tbody.appendChild(tr);
   });
@@ -349,6 +367,21 @@ async function loadMoreConversations() {
   }
 }
 
+async function deleteConversation(cid) {
+  if (!cid) return;
+  if (!confirm(`Delete conversation ${cid}? This cannot be undone.`)) return;
+  await deleteJSON(`/admin/api/conversation/${encodeURIComponent(cid)}`);
+  const detail = document.getElementById('conv-detail');
+  if (detail) detail.innerHTML = '';
+  const tbody = document.querySelector('#tbl-convos tbody');
+  if (tbody) tbody.innerHTML = '';
+  convoPager.page = 1;
+  convoPager.done = false;
+  const btn = document.getElementById('load-more');
+  if (btn) btn.disabled = false;
+  await loadMoreConversations();
+}
+
 // ---- Main init ----
 async function adminInit() {
   const err = document.getElementById('admin-error');
@@ -378,9 +411,11 @@ async function adminInit() {
     // Clicks in conversations table (View transcript / Likelihoods)
     document.querySelector('#tbl-convos')?.addEventListener('click', async (e) => {
       const btnView = e.target.closest('button[data-cid]');
+      const btnDelete = e.target.closest('button[data-del-cid]');
       const btnLike = e.target.closest('button[data-like]');
       try {
         if (btnView) await showConversation(btnView.getAttribute('data-cid'));
+        if (btnDelete) await deleteConversation(btnDelete.getAttribute('data-del-cid'));
         if (btnLike) await fetchAndShowLikelihoods(btnLike.getAttribute('data-like'));
       } catch (ex) {
         if (err) { err.style.display = ''; err.textContent = ex.message; }
@@ -417,8 +452,9 @@ if (location.pathname === '/admin' || location.pathname === '/admin/' ||
 
 const form = document.getElementById("addClinicianForm");
 
-form.addEventListener("submit", async function(e) {
-    e.preventDefault();
+if (form) {
+  form.addEventListener("submit", async function(e) {
+      e.preventDefault();
 
     const formData = new FormData(form);
     const data = Object.fromEntries(formData.entries());
@@ -449,36 +485,41 @@ form.addEventListener("submit", async function(e) {
       // Optionally reload CSRF token if needed
       await loadCsrf();
     }
-});
+  });
+}
 
 
 const toggleBtn = document.getElementById("toggleFormBtn");
 const formContainer = document.getElementById("clinicianFormContainer");
 const toggleIcon = document.getElementById("toggleIcon");
 
-toggleBtn.addEventListener("click", () => {
-    if (formContainer.style.display === "none" || formContainer.style.display === "") {
-        formContainer.style.display = "block";
-        toggleIcon.classList.remove("fa-chevron-down");
-        toggleIcon.classList.add("fa-chevron-up"); // indicate expanded
-    } else {
-        formContainer.style.display = "none";
-        toggleIcon.classList.remove("fa-chevron-up");
-        toggleIcon.classList.add("fa-chevron-down"); // indicate collapsed
-    }
-});
+if (toggleBtn && formContainer && toggleIcon) {
+  toggleBtn.addEventListener("click", () => {
+      if (formContainer.style.display === "none" || formContainer.style.display === "") {
+          formContainer.style.display = "block";
+          toggleIcon.classList.remove("fa-chevron-down");
+          toggleIcon.classList.add("fa-chevron-up");
+      } else {
+          formContainer.style.display = "none";
+          toggleIcon.classList.remove("fa-chevron-up");
+          toggleIcon.classList.add("fa-chevron-down");
+      }
+  });
+}
 
 const select = document.getElementById("institutionSelect");
 const input = document.getElementById("newInstitution");
 
-select.addEventListener("change", () => {
-  if (select.value) {
-    input.value = "";          // clear text input
-  }
-});
+if (select && input) {
+  select.addEventListener("change", () => {
+    if (select.value) {
+      input.value = "";
+    }
+  });
 
-input.addEventListener("input", () => {
-  if (input.value.trim() !== "") {
-    select.value = "";         // reset dropdown
-  }
-});
+  input.addEventListener("input", () => {
+    if (input.value.trim() !== "") {
+      select.value = "";
+    }
+  });
+}

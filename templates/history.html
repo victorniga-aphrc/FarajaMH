@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Conversation History · Mental Health Screening App{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-4">
+    <div class="card shadow-sm border-0">
+      <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <strong>Conversations</strong>
+        <a href="{{ url_for('misc_bp.new_conversation') }}" class="btn btn-sm btn-outline-primary">New</a>
+      </div>
+      <div class="card-body p-0">
+        <div id="history-list" class="list-group list-group-flush history-list"></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-8">
+    <div class="card shadow-sm border-0">
+      <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <strong id="history-detail-title">Conversation Detail</strong>
+        <button id="history-delete-btn" class="btn btn-sm btn-outline-danger" disabled>Delete</button>
+      </div>
+      <div class="card-body">
+        <div id="history-empty" class="text-muted">Select a conversation to view its transcript.</div>
+        <div id="history-messages" class="transcript-box" style="display:none;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/history.js') }}"></script>
+{% endblock %}

@@ -19,6 +19,16 @@ from models import create_conversation, log_message
 
 agents_bp = Blueprint("agents_bp", __name__)
 
+
+def _active_conversation_id() -> str:
+    cid = session.get("conversation_id") or session.get("id")
+    if not cid:
+        cid = create_conversation(owner_user_id=current_user.id)
+    session["conversation_id"] = cid
+    session["id"] = cid
+    session.setdefault("conv", [])
+    return cid
+
 def _normalize_roles(raw_roles) -> set[str]:
     """
     roles might be:
@@ -97,10 +107,7 @@ def agent_chat_stream():
         pass
     # ---------------------------------------------------------
 
-    if not session.get('id'):
-        session['id'] = create_conversation(owner_user_id=current_user.id)
-        session['conv'] = []
-    sid = session['id']
+    sid = _active_conversation_id()
 
     conv = session.get('conv', [])
     conv.append({"role": role, "message": message})
@@ -161,7 +168,7 @@ def agent_chat_stream():
 def live_mark_asked():
     data = request.get_json(silent=True) or {}
     _ = (data.get("text") or "").strip()
-    sid = session.get("id")
+    sid = session.get("conversation_id") or session.get("id")
     if not sid:
         return jsonify({"ok": False, "reason": "no_session"}), 400
     st = _SUGGEST_STATE.setdefault(sid, {"asked": 0, "buffer": []})
@@ -172,7 +179,7 @@ def live_mark_asked():
 @csrf.exempt
 @login_required
 def live_reset_plan():
-    sid = session.get("id")
+    sid = session.get("conversation_id") or session.get("id")
     if sid:
         _SUGGEST_STATE.pop(sid, None)
     return jsonify({"ok": True})
