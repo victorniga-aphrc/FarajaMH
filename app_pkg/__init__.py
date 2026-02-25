@@ -68,9 +68,16 @@ def create_app() -> Flask:
 
     # Blueprints
     from .routes.misc import misc_bp, register_error_handlers
-    from .routes.agents import agents_bp
     from .routes.faiss_routes import faiss_bp
     from .routes.stt import stt_bp, register_ws_routes
+
+    # Agents blueprint (optional: depends on crewai stack)
+    agents_bp = None
+    try:
+        from .routes.agents import agents_bp as _agents_bp  # type: ignore
+        agents_bp = _agents_bp
+    except Exception as e:
+        logger.warning("Agents blueprint disabled (crewai stack not available): %s", e)
 
     # Exempt JSON auth API from CSRF to avoid 400s on POST
     try:
@@ -81,7 +88,8 @@ def create_app() -> Flask:
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(misc_bp)
-    app.register_blueprint(agents_bp)
+    if agents_bp is not None:
+        app.register_blueprint(agents_bp)
     app.register_blueprint(faiss_bp)
     app.register_blueprint(stt_bp)
     register_ws_routes(sock)
@@ -145,20 +153,24 @@ def create_app() -> Flask:
     @app.before_request
     def ensure_conversation():
         try:
-            # migrate old key if present
+            # keep both keys in sync for backward compatibility
             if 'id' in session and 'conversation_id' not in session:
-                session['conversation_id'] = session.pop('id')
+                session['conversation_id'] = session['id']
+            if 'conversation_id' in session and 'id' not in session:
+                session['id'] = session['conversation_id']
 
             if current_user.is_authenticated and not session.get('conversation_id'):
-                session['conversation_id'] = create_conversation(owner_user_id=current_user.id)
+                cid = create_conversation(owner_user_id=current_user.id)
+                session['conversation_id'] = cid
+                session['id'] = cid
                 session['conv'] = []
         except Exception:
             pass
 
     @app.after_request
     def apply_security_headers(response):
+        # Permissions-Policy is the modern header; avoid duplicate Feature-Policy (deprecated)
         response.headers["Permissions-Policy"] = "microphone=(self)"
-        response.headers.setdefault("Feature-Policy", "microphone 'self'")
         return response
 
     try:

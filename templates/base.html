@@ -38,6 +38,7 @@
         <span class="navbar-toggler-icon"></span>
       </button>
       <div id="navbarNav" class="collapse navbar-collapse">
+        {% set role_names = current_user.roles | map(attribute='name') | list if current_user.is_authenticated else [] %}
         <ul class="navbar-nav ms-auto align-items-lg-center">
           <li class="nav-item">
             <a class="nav-link" href="{{ url_for('index') }}"><i class="fas fa-home me-1"></i>Home</a>
@@ -46,27 +47,25 @@
 <!--            <a class="nav-link" href="{{ url_for('health_check') }}"><i class="fas fa-heartbeat me-1"></i>Health</a>-->
 <!--          </li>-->
 
-          <li class="nav-item">
-            {% if current_user.is_authenticated %}
-              {% for role in current_user.roles %}
-                {% if role.name == "admin" %}
-                  <a class="nav-link" href="{{ url_for('admin_page') }}"><i class="fas fa-shield-halved me-1"></i>Dashboard</a>
-                {% endif %}
-                {% if role.name == "clinician" %}
-                  <a class="nav-link" href="{{ url_for('clinician_dashboard') }}"><i class="fas fa-shield-halved me-1"></i>Dashboard</a>
-                {% endif %}
-              {% endfor %}
+          {% if current_user.is_authenticated %}
+            {% if "admin" in role_names %}
+              <li class="nav-item">
+                <a class="nav-link" href="{{ url_for('admin_page') }}"><i class="fas fa-gauge-high me-1"></i>Admin Dashboard</a>
+              </li>
+            {% elif "clinician" in role_names %}
+              <li class="nav-item">
+                <a class="nav-link" href="{{ url_for('clinician_dashboard') }}"><i class="fas fa-user-doctor me-1"></i>Clinician Dashboard</a>
+              </li>
             {% endif %}
-          </li>
             <li class="nav-item">
-            {% if current_user.is_authenticated %}
-              {% for role in current_user.roles %}
-                {% if role.name == "admin" %}
-                  <a class="nav-link" href="{{ url_for('clinicians') }}"><i class="fas fa-user-md me-1"></i>Clinicians</a>
-                {% endif %}
-              {% endfor %}
+              <a class="nav-link" href="{{ url_for('misc_bp.history_page') }}"><i class="fas fa-clock-rotate-left me-1"></i>History</a>
+            </li>
+            {% if "admin" in role_names %}
+              <li class="nav-item">
+                <a class="nav-link" href="{{ url_for('clinicians') }}"><i class="fas fa-user-md me-1"></i>Clinicians</a>
+              </li>
             {% endif %}
-          </li>
+          {% endif %}
           <li class="nav-item d-flex align-items-center ms-lg-2">
             <button id="theme-toggle" type="button" class="btn btn-sm btn-outline-secondary" aria-label="Toggle theme">
               <i class="fa-solid fa-moon"></i><span class="d-none d-md-inline ms-1">Theme</span>
@@ -74,6 +73,9 @@
           </li>
           <li class="nav-item">
             {% if current_user.is_authenticated %}
+              <span class="navbar-text small text-muted me-2">
+                {{ current_user.display_name if current_user.display_name else current_user.email }}
+              </span>
               <button id="logout-btn" type="button" class="btn btn-outline-secondary ms-lg-3">
                 <i class="fas fa-right-from-bracket me-1"></i>Log out
               </button>

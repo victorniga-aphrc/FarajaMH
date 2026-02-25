@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import pickle
 import faiss
 import numpy as np
@@ -8,7 +9,6 @@ from sentence_transformers import SentenceTransformer
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-# top of file, add:
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
@@ -45,9 +45,11 @@ class MentalHealthQuestionsFAISS:
     FAISS index for mental health questions only
     """
 
-    def __init__(self, model_name: str = 'models/all-MiniLM-L6-v2'):
-        self.model_name = model_name
-        self.model = SentenceTransformer(model_name)
+    def __init__(self, model_name: str = None):
+        # Use env override if present; otherwise use a valid public HF id
+        default_model = "sentence-transformers/all-MiniLM-L6-v2"
+        self.model_name = model_name or os.getenv("QUESTIONS_EMBED_MODEL", default_model)
+        self.model = SentenceTransformer(self.model_name)
         self.index = None
         self.questions: List[Dict[str, Any]] = []
         self.embeddings = None

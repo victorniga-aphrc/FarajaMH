@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import wave
@@ -23,11 +24,21 @@ from google.genai import types as genai_types
 
 from .. import csrf  # use app_pkg.csrf
 
+try:
+    from simple_websocket.errors import ConnectionClosed
+except ImportError:
+    ConnectionClosed = None  # type: ignore
+
 stt_bp = Blueprint("stt_bp", __name__)
 logger = logging.getLogger(__name__)
 
+# Suppress noisy AFC (automatic function calling) INFO from google-genai when not using tools
+logging.getLogger("google_genai.models").setLevel(logging.WARNING)
+
 # ----------- ENV / Defaults -----------
 
+# Google AI (Gemini) API key – required for speech-to-text. Get one at https://aistudio.google.com/apikey
+GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
 GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash").strip()
 
 SAMPLE_RATE             = int(os.getenv("SAMPLE_RATE", "16000"))
@@ -42,7 +53,8 @@ EMIT_PARTIALS           = (os.getenv("EMIT_PARTIALS", "false").lower() == "true"
 PARTIAL_MIN_INTERVAL_MS = int(os.getenv("STT_PARTIAL_MIN_INTERVAL_MS", "600"))
 SEGMENT_SILENCE_MS      = int(os.getenv("STT_SEGMENT_SILENCE_MS", "1200"))
 MAX_SEGMENT_SEC         = float(os.getenv("STT_MAX_SEGMENT_SEC", "10.0"))
-RMS_MIN                 = float(os.getenv("STT_RMS_MIN", "250.0"))
+# ~0.002 normalized (reference); 80/32768 ≈ 0.0024
+RMS_MIN                 = float(os.getenv("STT_RMS_MIN", "80.0"))
 
 if shutil.which(FFMPEG_BIN) is None:
     alt = shutil.which("ffmpeg")
@@ -143,32 +155,22 @@ def _bytes_to_temp_wav(pcm_bytes: bytes, sr: int) -> str:
 
 def start_ffmpeg_decoder():
     """
-    Use the exact same decoder pipeline as the working Whisper app.
+    Decode WebM/opus from browser to 16kHz mono s16le (same as early_cancer_diagnosis).
+    Let FFmpeg auto-detect input format from pipe.
     """
     cmd = [
         FFMPEG_BIN,
-        "-y",
-        "-f",
-        "matroska,webm",
-        "-err_detect",
-        "ignore_err",
-        "-analyzeduration",
-        "0",
-        "-probesize",
-        "32",
-        "-fflags",
-        "+genpts+igndts",
-        "-re",
+        "-hide_banner",
+        "-loglevel",
+        "error",
         "-i",
         "pipe:0",
-        "-f",
-        "s16le",
         "-ar",
         str(SAMPLE_RATE),
         "-ac",
         "1",
-        "-acodec",
-        "pcm_s16le",
+        "-f",
+        "s16le",
         "pipe:1",
     ]
     return subprocess.Popen(
@@ -176,7 +178,7 @@ def start_ffmpeg_decoder():
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
-        bufsize=1024,
+        bufsize=0,
     )
 
 
@@ -196,9 +198,13 @@ class GeminiTranscriber:
         with cls._lock:
             if cls._client is not None:
                 return cls._client
+            if not GEMINI_API_KEY:
+                raise ValueError(
+                    "GEMINI_API_KEY (or GOOGLE_API_KEY) not set. "
+                    "Add it to .env for speech-to-text. Get a key at https://aistudio.google.com/apikey"
+                )
             try:
-                # Reads key from GEMINI_API_KEY or GOOGLE_API_KEY
-                cls._client = genai.Client()
+                cls._client = genai.Client(api_key=GEMINI_API_KEY)
             except Exception:
                 logger.exception("Failed to initialize Gemini client")
                 raise
@@ -211,31 +217,30 @@ class GeminiTranscriber:
             audio_bytes = f.read()
 
         lang = (lang or "bilingual").lower()
-        if lang == "english":
-            lang_hint = "The conversation is mainly in English (Kenyan context)."
-        elif lang == "swahili":
-            lang_hint = "The conversation is mainly in Swahili (Kenyan/Tanzanian context)."
+        if lang in ("english", "en"):
+            prompt_text = "Transcribe the audio in English."
+        elif lang in ("swahili", "sw", "kiswahili"):
+            prompt_text = "Transcribe the audio in Swahili."
         else:
-            lang_hint = (
-                "The conversation may mix English and Swahili (Kenyan/Tanzanian code-switching)."
-            )
+            prompt_text = "Transcribe the audio. The speaker may use English and/or Swahili."
 
-        prompt_text = (
-            f"{lang_hint} "
-            "Transcribe this clinician–patient mental health screening conversation "
-            "verbatim. Preserve code-switching and do NOT summarize. "
-            "Return only the transcript text, no speaker labels."
-        )
+        # Same Content shape as early_cancer_diagnosis (role=user, parts=[text, audio])
+        contents = [
+            genai_types.Content(
+                role="user",
+                parts=[
+                    genai_types.Part.from_text(text=prompt_text),
+                    genai_types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav"),
+                ],
+            )
+        ]
+        config = genai_types.GenerateContentConfig(temperature=0.0)
 
         try:
             response = client.models.generate_content(
                 model=GEMINI_MODEL_NAME,
-                contents=[
-                    prompt_text,
-                    genai_types.Part.from_bytes(
-                        data=audio_bytes, mime_type="audio/wav"
-                    ),
-                ],
+                contents=contents,
+                config=config,
             )
         except Exception:
             logger.exception("Gemini generate_content failed")
@@ -255,14 +260,18 @@ def register_ws_routes(sock):
 
         BYTES_PER_SAMPLE = 2
         FRAME_BYTES = int(SAMPLE_RATE * (VAD_FRAME_MS / 1000.0)) * BYTES_PER_SAMPLE
-        RING_SECONDS = 14
-        RING_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * RING_SECONDS
+        # Reference: minimum segment length 0.35s for finalize (Gemini works better with longer clips)
+        MIN_SEGMENT_BYTES = int(SAMPLE_RATE * 0.35) * BYTES_PER_SAMPLE
 
         def send_json(obj: Dict):
             try:
                 import json
                 ws.send(json.dumps(obj))
-            except Exception:
+            except Exception as e:
+                # Normal client disconnect (e.g. user stopped mic) – don't log as error
+                if ConnectionClosed is not None and isinstance(e, ConnectionClosed):
+                    logger.debug("WS send_json skipped (client closed): %s", e)
+                    return
                 logger.exception("WS send_json failed")
 
         try:
@@ -271,18 +280,24 @@ def register_ws_routes(sock):
             send_json({"type": "error", "message": str(e)})
             return
 
-        ring = bytearray()
         ws_buf = b""
         stop = threading.Event()
         MIN_WEBSOCKET_CHUNK = 512
 
-        in_speech = False
-        seg_buf = bytearray()
-        seg_start_ts = None
-        last_voiced_ts = None
-        last_emit_partial_ts = 0.0
+        # Shared counters for meter (approximate; no lock for simplicity)
+        bytes_in_total = [0]  # list so ingest() can mutate
+        bytes_pcm_total = [0]  # main loop updates
 
+        # Single growing segment (reference pattern): always accumulate; finalize on silence or max time
+        segment = bytearray()
+        seg_start_ts = time.time()
+        last_voiced_ts = time.time()
+        # Normalized RMS threshold for "is_voiced" (reference: rms > 0.002 on float32)
+        RMS_NORMALIZED_MIN = 0.002
+
+        # Reference: worker puts results on queue; main loop drains and sends. Worker sets flush_event when done.
         job_q: "queue.Queue[bytes]" = queue.Queue(maxsize=6)
+        flush_event = threading.Event()
 
         def worker():
             engine = GEMINI_MODEL_NAME or "gemini"
@@ -291,6 +306,7 @@ def register_ws_routes(sock):
                     pcm = job_q.get(timeout=0.25)
                 except queue.Empty:
                     continue
+                wav_path = None
                 try:
                     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
                         wav_path = tf.name
@@ -303,19 +319,42 @@ def register_ws_routes(sock):
                     text = GeminiTranscriber.transcribe_wav(wav_path, lang=client_lang)
                     text = _clean_text(text or "")
                     if text:
+                        logger.debug("STT final sent len=%s", len(text))
                         send_json({"type": "final", "text": text, "engine": engine})
-                except Exception:
-                    logging.exception("ASR worker failed")
+                    else:
+                        logger.debug("STT Gemini returned empty text for segment len=%s", len(pcm))
+                except Exception as e:
+                    logger.exception("ASR worker failed")
+                    send_json({"type": "error", "message": f"Transcription failed: {e}"})
                 finally:
-                    try:
-                        os.unlink(wav_path)
-                    except Exception:
-                        pass
+                    if wav_path:
+                        try:
+                            os.unlink(wav_path)
+                        except Exception:
+                            pass
                     job_q.task_done()
+                    flush_event.set()
 
         threading.Thread(target=worker, daemon=True).start()
 
-        def ingest():
+        # Reference: separate thread reads PCM from FFmpeg into queue (0.1s chunks)
+        pcm_q: "queue.Queue[bytes]" = queue.Queue()
+        CHUNK_BYTES = int(SAMPLE_RATE * 0.1) * 2
+
+        def read_pcm():
+            try:
+                while not stop.is_set():
+                    data = ff.stdout.read(CHUNK_BYTES) if hasattr(ff.stdout, "read") else b""
+                    if not data:
+                        break
+                    bytes_pcm_total[0] += len(data)
+                    pcm_q.put(data)
+            except Exception:
+                logger.debug("read_pcm ended")
+            finally:
+                stop.set()
+
+        def write_webm():
             nonlocal ws_buf
             try:
                 send_json({"type": "meter", "bytes_in": 0, "bytes_pcm": 0})
@@ -323,8 +362,19 @@ def register_ws_routes(sock):
                     frame = ws.receive()
                     if frame is None:
                         break
-                    if isinstance(frame, str) or not frame:
+                    # Control: client sends {"type": "stop"} as text to request flush before close
+                    if isinstance(frame, str):
+                        try:
+                            j = json.loads(frame)
+                            if j.get("type") == "stop":
+                                stop.set()
+                                break
+                        except Exception:
+                            pass
                         continue
+                    n = len(frame) if isinstance(frame, (bytes, bytearray)) else 0
+                    if n:
+                        bytes_in_total[0] += n
                     ws_buf += frame
                     if len(ws_buf) >= MIN_WEBSOCKET_CHUNK:
                         try:
@@ -335,7 +385,7 @@ def register_ws_routes(sock):
                             logger.exception("FFmpeg stdin write failed")
                             break
             except Exception:
-                logger.debug("WS ingest ended")
+                logger.debug("WS write_webm ended")
             finally:
                 stop.set()
                 try:
@@ -346,98 +396,60 @@ def register_ws_routes(sock):
                 except Exception:
                     pass
 
-        threading.Thread(target=ingest, daemon=True).start()
+        threading.Thread(target=read_pcm, daemon=True).start()
+        threading.Thread(target=write_webm, daemon=True).start()
 
         last_meter_ts = time.time()
 
         try:
             while not stop.is_set():
                 try:
-                    chunk = ff.stdout.read(FRAME_BYTES) if hasattr(ff.stdout, "read") else b""
-                except Exception:
-                    chunk = b""
+                    block = pcm_q.get(timeout=0.5)
+                except queue.Empty:
+                    if (time.time() - last_meter_ts) > 1.0:
+                        send_json({
+                            "type": "meter",
+                            "bytes_in": bytes_in_total[0],
+                            "bytes_pcm": bytes_pcm_total[0],
+                        })
+                        last_meter_ts = time.time()
+                    continue
 
-                if chunk:
-                    ring.extend(chunk)
-                    if len(ring) > RING_BYTES:
-                        del ring[: -RING_BYTES]
+                segment.extend(block)
+                seg_bytes = bytes(segment)
+                voiced_ratio = vad_voiced_ratio(
+                    seg_bytes, SAMPLE_RATE, frame_ms=VAD_FRAME_MS, aggressiveness=VAD_AGGR
+                )
+                rms_norm = rms_level(seg_bytes) / 32768.0 if seg_bytes else 0.0
+                is_voiced = voiced_ratio >= VAD_RATIO_MIN and rms_norm > RMS_NORMALIZED_MIN
+                if is_voiced:
+                    last_voiced_ts = time.time()
 
-                    # VAD state machine
-                    if not in_speech:
-                        tail_len = FRAME_BYTES * max(int(1000 / VAD_FRAME_MS), 1)
-                        tail = bytes(ring[-tail_len:]) if len(ring) >= tail_len else bytes(ring)
-                        if len(tail) >= FRAME_BYTES:
-                            vr = vad_voiced_ratio(
-                                tail,
-                                SAMPLE_RATE,
-                                frame_ms=VAD_FRAME_MS,
-                                aggressiveness=VAD_AGGR,
-                            )
-                            if vr >= VAD_RATIO_MIN and rms_level(tail) >= RMS_MIN:
-                                in_speech = True
-                                seg_buf.extend(tail)
-                                seg_start_ts = time.time()
-                                last_voiced_ts = time.time()
-                    else:
-                        seg_buf.extend(chunk)
-                        vr_frame = vad_voiced_ratio(
-                            chunk,
-                            SAMPLE_RATE,
-                            frame_ms=VAD_FRAME_MS,
-                            aggressiveness=VAD_AGGR,
-                        )
-                        if vr_frame >= VAD_RATIO_MIN or rms_level(chunk) >= RMS_MIN:
-                            last_voiced_ts = time.time()
+                now = time.time()
+                silence_ms = (now - last_voiced_ts) * 1000.0
+                seg_ms = (now - seg_start_ts) * 1000.0
+                should_finalize = (
+                    (silence_ms >= SEGMENT_SILENCE_MS and len(segment) >= MIN_SEGMENT_BYTES)
+                    or (seg_ms >= MAX_SEGMENT_SEC * 1000.0)
+                )
+                if should_finalize:
+                    if not job_q.full() and len(seg_bytes) >= MIN_SEGMENT_BYTES:
+                        vr = vad_voiced_ratio(seg_bytes, SAMPLE_RATE, VAD_FRAME_MS, VAD_AGGR)
+                        if vr >= 0.15:
+                            job_q.put(seg_bytes)
+                            logger.debug("STT segment submitted len=%s voiced_ratio=%.2f", len(seg_bytes), vr)
+                    segment.clear()
+                    seg_start_ts = time.time()
+                    last_voiced_ts = time.time()
 
-                        # Optional partials (be careful: each one calls Gemini)
-                        if EMIT_PARTIALS and (time.time() - last_emit_partial_ts) * 1000.0 >= PARTIAL_MIN_INTERVAL_MS:
-                            tail_win = int(SAMPLE_RATE * 2.0) * 2
-                            tail = bytes(seg_buf[-tail_win:]) if len(seg_buf) > tail_win else bytes(seg_buf)
-                            if len(tail) >= 3 * FRAME_BYTES:
-                                try:
-                                    p_wav = _bytes_to_temp_wav(tail, SAMPLE_RATE)
-                                    ptext = GeminiTranscriber.transcribe_wav(p_wav, lang=client_lang)
-                                    try:
-                                        os.unlink(p_wav)
-                                    except Exception:
-                                        pass
-                                    ptext = _clean_text(ptext or "")
-                                    if ptext:
-                                        send_json(
-                                            {
-                                                "type": "partial",
-                                                "text": ptext,
-                                                "engine": GEMINI_MODEL_NAME,
-                                            }
-                                        )
-                                except Exception:
-                                    pass
-                                finally:
-                                    last_emit_partial_ts = time.time()
-
-                        # Segment timeout
-                        if seg_start_ts and (time.time() - seg_start_ts) >= MAX_SEGMENT_SEC:
-                            if not job_q.full() and len(seg_buf) > FRAME_BYTES * 5:
-                                job_q.put(bytes(seg_buf))
-                            seg_buf.clear()
-                            in_speech = False
-                            seg_start_ts = None
-                            last_voiced_ts = None
-
-                        # Silence-based end of segment
-                        if last_voiced_ts and (time.time() - last_voiced_ts) * 1000.0 >= SEGMENT_SILENCE_MS:
-                            if not job_q.full() and len(seg_buf) > FRAME_BYTES * 5:
-                                job_q.put(bytes(seg_buf))
-                            seg_buf.clear()
-                            in_speech = False
-                            seg_start_ts = None
-                            last_voiced_ts = None
-
+                # Drain worker: we send "final" from worker thread; no out-queue to drain (reference worker has q_out)
                 if (time.time() - last_meter_ts) > 1.0:
-                    send_json({"type": "meter", "status": "ok"})
+                    send_json({
+                        "type": "meter",
+                        "bytes_in": bytes_in_total[0],
+                        "bytes_pcm": bytes_pcm_total[0],
+                    })
                     last_meter_ts = time.time()
-
-                time.sleep(0.005)
         except Exception:
             logger.exception("/ws/stt loop error")
         finally:
@@ -447,14 +459,16 @@ def register_ws_routes(sock):
                     ff.terminate()
             except Exception:
                 pass
+            # Flush final segment so user gets transcript when they click Stop (reference has no stop message; we do)
             try:
-                if len(seg_buf) > FRAME_BYTES * 5 and not job_q.full():
-                    job_q.put(bytes(seg_buf))
+                seg_bytes = bytes(segment)
+                if len(seg_bytes) >= MIN_SEGMENT_BYTES and not job_q.full():
+                    if vad_voiced_ratio(seg_bytes, SAMPLE_RATE, VAD_FRAME_MS, VAD_AGGR) >= 0.15:
+                        flush_event.clear()
+                        job_q.put(seg_bytes)
+                        flush_event.wait(timeout=8.0)
             except Exception:
                 pass
-            t0 = time.time()
-            while not job_q.empty() and (time.time() - t0) < 2.0:
-                time.sleep(0.05)
 
 
 # ----------- Batch transcribe (real actors mode) -----------
