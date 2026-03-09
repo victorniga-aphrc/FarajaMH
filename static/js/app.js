@@ -142,6 +142,7 @@ async function logout() {
 }
 
 window.ACTIVE_PATIENT_ID = window.ACTIVE_PATIENT_ID || null;
+window.CONVERSATION_PAUSED = window.CONVERSATION_PAUSED || false;
 
 async function fetchPatients() {
   const r = await fetch('/api/patients', { credentials: 'same-origin' });
@@ -641,6 +642,27 @@ document.addEventListener("DOMContentLoaded", () => {
 
   on($("resetBtn"), "click", () => { window.resetConversationAndUI(); });
 
+  const pauseBtn = $("pauseBtn");
+  if (pauseBtn) {
+    const applyPauseUI = () => {
+      const paused = !!window.CONVERSATION_PAUSED;
+      pauseBtn.textContent = paused ? "Resume" : "Pause";
+      pauseBtn.classList.toggle("btn-outline-secondary", !paused);
+      pauseBtn.classList.toggle("btn-outline-success", paused);
+      const msgInput = $("agentMessage");
+      const recordBtn = $("recordAudioBtn");
+      const startLiveBtn = $("startLiveBtn");
+      if (msgInput) msgInput.disabled = paused;
+      if (recordBtn) recordBtn.disabled = paused;
+      if (startLiveBtn) startLiveBtn.disabled = paused;
+    };
+    applyPauseUI();
+    on(pauseBtn, "click", () => {
+      window.CONVERSATION_PAUSED = !window.CONVERSATION_PAUSED;
+      applyPauseUI();
+    });
+  }
+
   // Turn-based send (typed + voice-submitted transcription)
   on($("agentChatForm"), "submit", (e) => {
     e.preventDefault();
@@ -654,6 +676,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (!message) { alert("Please enter a message!"); return; }
     if ($('patientSelect') && !window.ACTIVE_PATIENT_ID) { alert("Select a patient before starting conversation."); return; }
+    if (window.CONVERSATION_PAUSED) { alert("Conversation is paused. Click Resume to continue."); return; }
 
     typingIndicator && (typingIndicator.style.display = "block");
 
@@ -726,6 +749,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const audioElement = $("recordedAudio");
 
   on(recordBtn, "click", async () => {
+    if (window.CONVERSATION_PAUSED) {
+      alert("Conversation is paused. Click Resume to continue.");
+      return;
+    }
     if (!mediaRecorder || mediaRecorder.state === "inactive") {
       try {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -822,6 +849,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function startLive() {
     if (liveActive) return;
+    if (window.CONVERSATION_PAUSED) {
+      alert('Conversation is paused. Click Resume to continue.');
+      return;
+    }
     if ($('patientSelect') && !window.ACTIVE_PATIENT_ID) {
       alert('Select a patient before starting live conversation.');
       return;
