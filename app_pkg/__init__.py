@@ -160,7 +160,12 @@ def create_app() -> Flask:
                 session['id'] = session['conversation_id']
 
             if current_user.is_authenticated and not session.get('conversation_id'):
-                cid = create_conversation(owner_user_id=current_user.id)
+                roles = {getattr(r, "name", "").lower() for r in getattr(current_user, "roles", [])}
+                needs_patient = ("clinician" in roles) or ("admin" in roles)
+                patient_id = session.get("active_patient_id")
+                if needs_patient and not patient_id:
+                    return
+                cid = create_conversation(owner_user_id=current_user.id, patient_id=patient_id)
                 session['conversation_id'] = cid
                 session['id'] = cid
                 session['conv'] = []

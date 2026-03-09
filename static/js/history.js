@@ -37,6 +37,7 @@
           <small>${new Date(c.created_at).toLocaleString()}</small>
           <small>${c.message_count || 0} msgs</small>
         </div>
+        <div class="small text-muted">${esc(c.patient_identifier || "No patient")}</div>
         <div class="small text-truncate">${esc(c.preview || "No preview")}</div>
       `;
       host.appendChild(a);

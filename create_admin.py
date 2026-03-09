@@ -4,7 +4,7 @@
 Create (or upsert) an admin user inside the same database the app uses.
 
 Usage:
-    python scripts/create_admin.py admin@gmail.com 'Admin123!'
+    python scripts/create_admin.py admin@gmail.com 'Admin123!' admin
 
 Notes:
 - This script *requires* the same Argon2-based hasher the app uses.
@@ -34,7 +34,7 @@ def ensure_role(db, name: str) -> Role:
     return role
 
 
-def main(email: str, password: str) -> None:
+def main(email: str, password: str, username: str | None = None) -> None:
     """
     Create or update an admin user with the given email and password.
     Always uses Argon2 (via security.hash_password).
@@ -45,6 +45,7 @@ def main(email: str, password: str) -> None:
     db = SessionLocal()
     try:
         email = email.strip().lower()
+        username = (username or email.split("@")[0]).strip()
 
         admin_role = ensure_role(db, "admin")
         clinician_role = ensure_role(db, "clinician")
@@ -53,6 +54,7 @@ def main(email: str, password: str) -> None:
         if not user:
             user = User(
                 email=email,
+                username=username,
                 password_hash=hash_password(password),
                 is_active=True,
             )
@@ -63,6 +65,8 @@ def main(email: str, password: str) -> None:
         else:
             # Update the password to the provided one (helps when re-running)
             user.password_hash = hash_password(password)
+            if not getattr(user, "username", None):
+                user.username = username
             if hasattr(user, "is_active") and user.is_active is False:
                 user.is_active = True
             db.commit()
@@ -89,7 +93,7 @@ def main(email: str, password: str) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python scripts/create_admin.py admin@gmail.com 'Admin123!'", file=sys.stderr)
+    if len(sys.argv) < 3 or len(sys.argv) > 4:
+        print("Usage: python scripts/create_admin.py admin@gmail.com 'Admin123!' [username]", file=sys.stderr)
         sys.exit(1)
-    main(sys.argv[1], sys.argv[2])
+    main(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) == 4 else None)

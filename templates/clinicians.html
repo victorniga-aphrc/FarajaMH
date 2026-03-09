@@ -5,50 +5,103 @@
   <div class="row mb-4">
     <div class="col-lg-8 mx-auto text-center">
       <h1 class="display-5 text-primary mb-3">
-        <i class="fas fa-user-md"></i> Clinicians
+        <i class="fas fa-users-cog"></i> User Management
       </h1>
       <p class="lead text-muted">
-        View all clinicians and add new ones.
+        Manage clinicians and admins with role-specific visibility.
       </p>
     </div>
   </div>
+
+<!-- Admins list -->
+<div class="row mb-4">
+  <div class="col-lg-10 mx-auto">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h4 class="mb-3">Admins</h4>
+        <table class="table table-striped">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Username</th>
+              <th>Email</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for user in admins %}
+            <tr>
+              <td>{{ user.name or "-" }}</td>
+              <td>{{ user.username or user.display_name }}</td>
+              <td>{{ user.email }}</td>
+              <td>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-primary edit-user-btn"
+                  data-user-id="{{ user.id }}"
+                  data-name="{{ user.name or '' }}"
+                  data-username="{{ user.username or '' }}"
+                  data-email="{{ user.email }}"
+                  data-role="admin"
+                  data-institution-id=""
+                >
+                  Edit
+                </button>
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="4" class="text-center text-muted">No admins found.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- Clinicians list -->
 <div class="row mb-4">
   <div class="col-lg-10 mx-auto">
     <div class="card shadow-sm">
       <div class="card-body">
-        <h4 class="mb-3">Clinicians List</h4>
+        <h4 class="mb-3">Clinicians</h4>
         <table class="table table-striped">
           <thead>
             <tr>
               <th>Name</th>
+              <th>Username</th>
               <th>Email</th>
               <th>Institution</th>
-              <!-- <th>Actions</th>  new column -->
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {% for clinician in clinicians %}
             <tr>
-              <td>{{ clinician.name }}</td>
+              <td>{{ clinician.name or "-" }}</td>
+              <td>{{ clinician.username or clinician.display_name }}</td>
               <td>{{ clinician.email }}</td>
-              <td>{{ clinician.institution.name }}</td>
-              <!-- Edit icon 
+              <td>{{ clinician.institution.name if clinician.institution else "-" }}</td>
               <td>
-                
-                <a href="#" class="text-primary me-2" data-id="{{ clinician.id }}" title="Edit">
-                  <i class="fas fa-edit"></i>
-                </a>
-                <a href="#" class="text-danger" data-id="{{ clinician.id }}" title="Delete">
-                  <i class="fas fa-trash-alt"></i>
-                </a>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-primary edit-user-btn"
+                  data-user-id="{{ clinician.id }}"
+                  data-name="{{ clinician.name or '' }}"
+                  data-username="{{ clinician.username or '' }}"
+                  data-email="{{ clinician.email }}"
+                  data-role="clinician"
+                  data-institution-id="{{ clinician.institution_id or '' }}"
+                >
+                  Edit
+                </button>
               </td>
             </tr>
-            -->
             {% else %}
             <tr>
-              <td colspan="4" class="text-center text-muted">No clinicians found.</td>
+              <td colspan="5" class="text-center text-muted">No clinicians found.</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -81,8 +134,16 @@
               <input type="text" class="form-control" id="clinicianName" name="name" required>
             </div>
             <div class="mb-3">
+              <label for="clinicianUsername" class="form-label">Username</label>
+              <input type="text" class="form-control" id="clinicianUsername" name="username" required>
+            </div>
+            <div class="mb-3">
               <label for="clinicianEmail" class="form-label">Email</label>
               <input type="email" class="form-control" id="clinicianEmail" name="email" required>
+            </div>
+            <div class="mb-3">
+              <label for="clinicianPassword" class="form-label">Password</label>
+              <input type="password" class="form-control" id="clinicianPassword" name="password" minlength="8" required>
             </div>
             <div class="mb-3">
               <label class="form-label">Institution</label>
@@ -102,6 +163,53 @@
   </div>
 </div>
 
-<!-- Scripts -->
+<div class="modal fade" id="editUserModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Edit User</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="edit-user-error" class="alert alert-danger d-none"></div>
+        <form id="editUserForm" data-url="/admin/api/users/">
+          <input type="hidden" id="editUserId" />
+          <input type="hidden" id="editUserRole" />
+          <div class="mb-2">
+            <label class="form-label" for="editUserName">Name</label>
+            <input class="form-control" id="editUserName" type="text" />
+          </div>
+          <div class="mb-2">
+            <label class="form-label" for="editUsername">Username</label>
+            <input class="form-control" id="editUsername" type="text" required />
+          </div>
+          <div class="mb-2">
+            <label class="form-label" for="editUserEmail">Email</label>
+            <input class="form-control" id="editUserEmail" type="email" required />
+          </div>
+          <div class="mb-2" id="editInstitutionWrap">
+            <label class="form-label">Institution (clinician only)</label>
+            <select class="form-select mb-2" id="editInstitutionSelect">
+              <option value="">Keep current institution</option>
+              {% for inst in institutions %}
+              <option value="{{ inst.id }}">{{ inst.name }}</option>
+              {% endfor %}
+            </select>
+            <input class="form-control" id="editNewInstitution" type="text" placeholder="Or type new institution" />
+          </div>
+          <div class="mb-2">
+            <label class="form-label" for="editUserPassword">New Password (optional)</label>
+            <input class="form-control" id="editUserPassword" type="password" minlength="8" />
+          </div>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
 <script src="{{ url_for('static', filename='js/admin.js') }}"></script>
 {% endblock %}

@@ -35,7 +35,11 @@ def _ensure_qfaiss():
 def _ensure_conversation_id() -> str:
     cid = session.get("conversation_id") or session.get("id")
     if not cid:
-        cid = create_conversation(owner_user_id=current_user.id)
+        roles = {getattr(r, "name", "").lower() for r in getattr(current_user, "roles", [])}
+        patient_id = session.get("active_patient_id")
+        if (("clinician" in roles) or ("admin" in roles)) and not patient_id:
+            raise ValueError("Select a patient before starting a conversation")
+        cid = create_conversation(owner_user_id=current_user.id, patient_id=patient_id)
     session["conversation_id"] = cid
     session["id"] = cid
     session.setdefault("conv", [])
@@ -97,7 +101,10 @@ def faiss_suggest_question():
     q = results[0]
 
     # Ensure conversation exists
-    sid = _ensure_conversation_id()
+    try:
+        sid = _ensure_conversation_id()
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
     eng_text = (q.get("question", {}) or {}).get("english") or ""
     try:
@@ -133,7 +140,10 @@ def faiss_mark_answer():
     if not text:
         return jsonify({"error": "text is required"}), 400
 
-    sid = _ensure_conversation_id()
+    try:
+        sid = _ensure_conversation_id()
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
     qid, qcat = _pop_pending_faiss_q(sid)
 

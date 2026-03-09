@@ -5,6 +5,11 @@ from .. import csrf
 from screening import run_screening, screening_to_dict
 from models import (
     create_conversation,
+    create_patient,
+    get_patient_for_user,
+    latest_conversation_id_for_owner_patient,
+    list_all_patients,
+    list_patients_for_owner,
     SessionLocal,
     User,
     Role,
@@ -40,10 +45,32 @@ from ..tts_engine import synthesize_speech_open
 misc_bp = Blueprint("misc_bp", __name__)
 
 
+def _is_admin(user) -> bool:
+    return any(r.name == "admin" for r in getattr(user, "roles", []))
+
+
+def _is_clinician(user) -> bool:
+    return any(r.name == "clinician" for r in getattr(user, "roles", []))
+
+
+def _requires_patient_context(user) -> bool:
+    return _is_admin(user) or _is_clinician(user)
+
+
+def _active_patient_id() -> int | None:
+    try:
+        return int(session.get("active_patient_id")) if session.get("active_patient_id") else None
+    except Exception:
+        return None
+
+
 def _get_or_create_conversation_id() -> str:
     cid = session.get("conversation_id") or session.get("id")
     if not cid:
-        cid = create_conversation(owner_user_id=current_user.id)
+        patient_id = _active_patient_id()
+        if _requires_patient_context(current_user) and not patient_id:
+            raise ValueError("Select a patient before starting a conversation")
+        cid = create_conversation(owner_user_id=current_user.id, patient_id=patient_id)
     session["conversation_id"] = cid
     session["id"] = cid
     session.setdefault("conv", [])
@@ -83,7 +110,10 @@ def admin_page():
 @login_required
 def reset_conv():
     session['conv'] = []
-    cid = create_conversation(owner_user_id=current_user.id)
+    patient_id = _active_patient_id()
+    if _requires_patient_context(current_user) and not patient_id:
+        return jsonify({"ok": False, "error": "Select a patient before starting a conversation"}), 400
+    cid = create_conversation(owner_user_id=current_user.id, patient_id=patient_id)
     session['conversation_id'] = cid
     session['id'] = cid
     return jsonify({'ok': True, 'conversation_id': cid})
@@ -102,7 +132,10 @@ def conv_log():
     if len(text) > 8000:
         text = text[:8000] + " …[truncated]"
 
-    cid = _get_or_create_conversation_id()
+    try:
+        cid = _get_or_create_conversation_id()
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
 
     log_message(
         cid,
@@ -132,7 +165,10 @@ def mh_screen():
     result = screening_to_dict(out)
 
     # Persist one ScreeningEvent row for this conversation (no user_id here)
-    cid = _get_or_create_conversation_id()
+    try:
+        cid = _get_or_create_conversation_id()
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
 
     db = SessionLocal()
     try:
@@ -155,11 +191,82 @@ def mh_screen():
 def history_page():
     return render_template("history.html")
 
+@misc_bp.get("/profile")
+@login_required
+def profile_page():
+    if not any(r.name in ("admin", "clinician") for r in current_user.roles):
+        return "Forbidden", 403
+    return render_template("profile.html")
+
 
 @misc_bp.get("/api/my-conversations")
 @login_required
 def api_my_conversations():
     return jsonify({"ok": True, "conversations": list_conversations_for_user(current_user.id)})
+
+
+@misc_bp.get("/api/patients")
+@login_required
+def api_list_patients():
+    if not _requires_patient_context(current_user):
+        return jsonify({"ok": False, "error": "Admin or clinician only"}), 403
+    patients = list_all_patients() if _is_admin(current_user) else list_patients_for_owner(current_user.id)
+    return jsonify({"ok": True, "patients": patients})
+
+
+@misc_bp.post("/api/patients")
+@login_required
+def api_create_patient():
+    if not _requires_patient_context(current_user):
+        return jsonify({"ok": False, "error": "Admin or clinician only"}), 403
+    data = request.get_json(silent=True) or {}
+    identifier = (data.get("identifier") or "").strip().upper()
+    if not identifier:
+        return jsonify({"ok": False, "error": "Patient identifier is required"}), 400
+    patient = create_patient(current_user.id, identifier)
+    if not patient:
+        return jsonify({"ok": False, "error": "Patient identifier already exists"}), 409
+    return jsonify({"ok": True, "patient": patient})
+
+
+@misc_bp.get("/api/current-patient")
+@login_required
+def api_current_patient():
+    pid = _active_patient_id()
+    if not pid:
+        return jsonify({"ok": True, "patient": None})
+    p = get_patient_for_user(pid, current_user.id, is_admin=_is_admin(current_user))
+    if not p:
+        session.pop("active_patient_id", None)
+        return jsonify({"ok": True, "patient": None})
+    return jsonify({"ok": True, "patient": {"id": p.id, "identifier": p.identifier, "owner_user_id": p.owner_user_id}})
+
+
+@misc_bp.post("/api/select-patient")
+@login_required
+def api_select_patient():
+    if not _requires_patient_context(current_user):
+        return jsonify({"ok": False, "error": "Admin or clinician only"}), 403
+    data = request.get_json(silent=True) or {}
+    patient_id = data.get("patient_id")
+    continue_latest = bool(data.get("continue_latest", True))
+    if not patient_id:
+        return jsonify({"ok": False, "error": "patient_id is required"}), 400
+    p = get_patient_for_user(int(patient_id), current_user.id, is_admin=_is_admin(current_user))
+    if not p:
+        return jsonify({"ok": False, "error": "Patient not found"}), 404
+
+    session["active_patient_id"] = p.id
+    session["conv"] = []
+    if continue_latest:
+        cid = latest_conversation_id_for_owner_patient(current_user.id, p.id)
+        if not cid:
+            cid = create_conversation(owner_user_id=current_user.id, patient_id=p.id)
+    else:
+        cid = create_conversation(owner_user_id=current_user.id, patient_id=p.id)
+    session["conversation_id"] = cid
+    session["id"] = cid
+    return jsonify({"ok": True, "patient": {"id": p.id, "identifier": p.identifier}, "conversation_id": cid})
 
 
 @misc_bp.get("/api/conversations/<cid>/messages")
@@ -201,7 +308,13 @@ def api_delete_conversation(cid):
     if not ok:
         return jsonify({"ok": False, "error": "Conversation not found"}), 404
     if session.get("conversation_id") == cid or session.get("id") == cid:
-        session["conversation_id"] = create_conversation(owner_user_id=current_user.id)
+        patient_id = _active_patient_id()
+        if _requires_patient_context(current_user) and not patient_id:
+            session.pop("conversation_id", None)
+            session.pop("id", None)
+            session["conv"] = []
+            return jsonify({"ok": True, "conversation_id": cid})
+        session["conversation_id"] = create_conversation(owner_user_id=current_user.id, patient_id=patient_id)
         session["id"] = session["conversation_id"]
         session["conv"] = []
     return jsonify({"ok": True, "conversation_id": cid})
@@ -210,7 +323,10 @@ def api_delete_conversation(cid):
 @misc_bp.get("/new_conversation")
 @login_required
 def new_conversation():
-    cid = create_conversation(owner_user_id=current_user.id)
+    patient_id = _active_patient_id()
+    if _requires_patient_context(current_user) and not patient_id:
+        return redirect(url_for("index"))
+    cid = create_conversation(owner_user_id=current_user.id, patient_id=patient_id)
     session["conversation_id"] = cid
     session["id"] = cid
     session["conv"] = []
@@ -276,8 +392,27 @@ def clinician_page():
         return "Forbidden", 403
     db = SessionLocal()
     try:
-        clinicians = db.query(User).join(User.roles).filter(Role.name == "clinician").order_by(desc(User.created_at)).all()
-        return render_template('clinicians.html', clinicians=clinicians, institutions=db.query(Institution).all())
+        admins = (
+            db.query(User)
+            .join(User.roles)
+            .filter(Role.name == "admin")
+            .order_by(desc(User.created_at))
+            .all()
+        )
+        clinicians = (
+            db.query(User)
+            .join(User.roles)
+            .filter(Role.name == "clinician")
+            .filter(~User.roles.any(Role.name == "admin"))
+            .order_by(desc(User.created_at))
+            .all()
+        )
+        return render_template(
+            'clinicians.html',
+            clinicians=clinicians,
+            admins=admins,
+            institutions=db.query(Institution).all(),
+        )
     finally:
         db.close()
 

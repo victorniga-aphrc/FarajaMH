@@ -20,10 +20,18 @@ from models import create_conversation, log_message
 agents_bp = Blueprint("agents_bp", __name__)
 
 
+def _requires_patient_context() -> bool:
+    user_roles = _normalize_roles(getattr(current_user, "roles", []) or [])
+    return ("clinician" in user_roles) or _is_admin(user_roles)
+
+
 def _active_conversation_id() -> str:
     cid = session.get("conversation_id") or session.get("id")
     if not cid:
-        cid = create_conversation(owner_user_id=current_user.id)
+        patient_id = session.get("active_patient_id")
+        if _requires_patient_context() and not patient_id:
+            raise ValueError("Select a patient before starting a conversation")
+        cid = create_conversation(owner_user_id=current_user.id, patient_id=patient_id)
     session["conversation_id"] = cid
     session["id"] = cid
     session.setdefault("conv", [])
@@ -107,7 +115,10 @@ def agent_chat_stream():
         pass
     # ---------------------------------------------------------
 
-    sid = _active_conversation_id()
+    try:
+        sid = _active_conversation_id()
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
     conv = session.get('conv', [])
     conv.append({"role": role, "message": message})

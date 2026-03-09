@@ -34,6 +34,8 @@ class Conversation(Base):
     id = Column(String, primary_key=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     owner_user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
+    patient_id = Column(Integer, ForeignKey("patients.id"), index=True, nullable=True)
+    patient = relationship("Patient", back_populates="conversations")
     messages = relationship("Message", back_populates="conversation",
                             cascade="all, delete-orphan",
                             order_by="Message.created_at.asc()")
@@ -112,6 +114,22 @@ class User(Base):
     def __repr__(self) -> str: return f"<User id={self.id} email={self.email}>"
 
 
+class Patient(Base):
+    __tablename__ = "patients"
+    id = Column(Integer, primary_key=True)
+    identifier = Column(String(64), nullable=False, index=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    conversations = relationship("Conversation", back_populates="patient")
+
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", "identifier", name="uq_patients_owner_identifier"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Patient id={self.id} identifier={self.identifier} owner_user_id={self.owner_user_id}>"
+
+
 class OTP(Base):
     __tablename__ = "otps"
 
@@ -167,12 +185,16 @@ def _seed_roles_admin():
         if not admin_user:
             admin_user = User(
                 email=admin_email,
+                username="testadmin",
                 password_hash=hash_password("adminpassword"),
                 is_active=True,
                 email_verified=True,
             )
             db.add(admin_user)
             db.commit()  # commit so admin_user.id exists
+        elif not admin_user.username:
+            admin_user.username = "testadmin"
+            db.commit()
 # '            print(f"Created admin user: {admin_email}")
 # '        else:
 #             print(f"Admin user already exists: {admin_email}")
@@ -203,6 +225,7 @@ def _seed_roles_admin():
         if not readme_admin:
             readme_admin = User(
                 email=readme_admin_email,
+                username="admin",
                 password_hash=hash_password("Admin123!"),
                 is_active=True,
                 email_verified=True,
@@ -210,6 +233,9 @@ def _seed_roles_admin():
             db.add(readme_admin)
             db.commit()
             db.refresh(readme_admin)
+        elif readme_admin.username != "admin":
+            readme_admin.username = "admin"
+            db.commit()
         admin_role = existing_roles["admin"]
         clinician_role = existing_roles.get("clinician")
         for r in (admin_role, clinician_role):
@@ -230,6 +256,7 @@ def _seed_roles_admin():
         if not doctor_user:
             doctor_user = User(
                 email=doctor_email,
+                username="doctor1",
                 password_hash=hash_password("Doctor1234"),
                 is_active=True,
                 email_verified=True,
@@ -237,6 +264,9 @@ def _seed_roles_admin():
             db.add(doctor_user)
             db.commit()
             db.refresh(doctor_user)
+        elif doctor_user.username != "doctor1":
+            doctor_user.username = "doctor1"
+            db.commit()
         if clinician_role:
             exists = db.execute(
                 user_roles.select().where(
@@ -255,11 +285,11 @@ def init_db():
     _seed_roles_admin()
 
 
-def create_conversation(owner_user_id: int | None = None) -> str:
+def create_conversation(owner_user_id: int | None = None, patient_id: int | None = None) -> str:
     db = SessionLocal()
     try:
         cid = str(_uuid.uuid4())
-        db.add(Conversation(id=cid, owner_user_id=owner_user_id))
+        db.add(Conversation(id=cid, owner_user_id=owner_user_id, patient_id=patient_id))
         db.commit()
         return cid
     finally:
@@ -311,16 +341,18 @@ def list_conversations_for_user(user_id: int):
                 Conversation.id,
                 Conversation.created_at,
                 func.count(Message.id).label("message_count"),
+                Patient.identifier.label("patient_identifier"),
             )
             .outerjoin(Message, Message.conversation_id == Conversation.id)
+            .outerjoin(Patient, Patient.id == Conversation.patient_id)
             .filter(Conversation.owner_user_id == user_id)
-            .group_by(Conversation.id, Conversation.created_at)
+            .group_by(Conversation.id, Conversation.created_at, Patient.identifier)
             .order_by(Conversation.created_at.desc())
             .all()
         )
 
         out = []
-        for cid, created_at, msg_count in rows:
+        for cid, created_at, msg_count, patient_identifier in rows:
             latest = (
                 db.query(Message)
                 .filter(Message.conversation_id == cid, Message.message.isnot(None))
@@ -336,9 +368,77 @@ def list_conversations_for_user(user_id: int):
                     "created_at": created_at.isoformat() if created_at else None,
                     "message_count": int(msg_count or 0),
                     "preview": preview,
+                    "patient_identifier": patient_identifier,
                 }
             )
         return out
+    finally:
+        db.close()
+
+
+def list_patients_for_owner(owner_user_id: int):
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(Patient)
+            .filter(Patient.owner_user_id == owner_user_id)
+            .order_by(Patient.created_at.desc())
+            .all()
+        )
+        return [{"id": p.id, "identifier": p.identifier, "owner_user_id": p.owner_user_id} for p in rows]
+    finally:
+        db.close()
+
+
+def list_all_patients():
+    db = SessionLocal()
+    try:
+        rows = db.query(Patient).order_by(Patient.created_at.desc()).all()
+        return [{"id": p.id, "identifier": p.identifier, "owner_user_id": p.owner_user_id} for p in rows]
+    finally:
+        db.close()
+
+
+def get_patient_for_user(patient_id: int, user_id: int, is_admin: bool = False):
+    db = SessionLocal()
+    try:
+        q = db.query(Patient).filter(Patient.id == patient_id)
+        if not is_admin:
+            q = q.filter(Patient.owner_user_id == user_id)
+        return q.first()
+    finally:
+        db.close()
+
+
+def create_patient(owner_user_id: int, identifier: str):
+    db = SessionLocal()
+    try:
+        existing = (
+            db.query(Patient)
+            .filter(Patient.owner_user_id == owner_user_id, Patient.identifier == identifier)
+            .first()
+        )
+        if existing:
+            return None
+        p = Patient(owner_user_id=owner_user_id, identifier=identifier)
+        db.add(p)
+        db.commit()
+        db.refresh(p)
+        return {"id": p.id, "identifier": p.identifier, "owner_user_id": p.owner_user_id}
+    finally:
+        db.close()
+
+
+def latest_conversation_id_for_owner_patient(owner_user_id: int, patient_id: int):
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(Conversation.id)
+            .filter(Conversation.owner_user_id == owner_user_id, Conversation.patient_id == patient_id)
+            .order_by(Conversation.created_at.desc())
+            .first()
+        )
+        return row[0] if row else None
     finally:
         db.close()
 

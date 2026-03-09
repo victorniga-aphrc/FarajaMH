@@ -5,14 +5,17 @@ init_db()
 db = SessionLocal()
 try:
     email = "admin@gmail.com".strip().lower()
+    username = "admin"
     pw = "Admin123!"
     user = db.query(User).filter_by(email=email).first()
     if not user:
-        user = User(email=email, password_hash=hash_password(pw), is_active=True, email_verified=True)
+        user = User(email=email, username=username, password_hash=hash_password(pw), is_active=True, email_verified=True)
         db.add(user); db.commit(); db.refresh(user)
         print(f"Created user: {email}")
     else:
         user.password_hash = hash_password(pw)
+        if not getattr(user, "username", None):
+            user.username = username
         if getattr(user, "is_active", True) is False:
             user.is_active = True
         db.commit()

@@ -110,7 +110,7 @@
           <h4 class="mb-3">Question Bank</h4>
           <div class="row g-2 align-items-end">
             <div class="col-md-3">
-              <label class="form-label">Category</label>
+              <label class="form-label" for="qbCategory">Category</label>
               <select id="qbCategory" class="form-select">
                 <option value="">All</option>
                 <option value="depression">Depression</option>
@@ -119,7 +119,7 @@
               </select>
             </div>
             <div class="col-md-5">
-              <label class="form-label">Search within category</label>
+              <label class="form-label" for="qbQuery">Search within category</label>
               <input id="qbQuery" class="form-control" placeholder="e.g., hopeless, panic, voices">
             </div>
             <div class="col-md-4 d-flex gap-2">
@@ -154,6 +154,16 @@
               <h2 class="m-0" id="agentsConversationHeader">Agents Conversation</h2>
 
               <div class="d-flex align-items-center gap-2 flex-wrap">
+                {% set role_names = current_user.roles | map(attribute='name') | list if current_user.is_authenticated else [] %}
+                {% if "admin" in role_names or "clinician" in role_names %}
+                <label for="patientSelect" class="form-label m-0">Patient</label>
+                <select id="patientSelect" class="form-select form-select-sm" style="width:auto; min-width: 140px;">
+                  <option value="">Select patient</option>
+                </select>
+                <button type="button" id="newPatientBtn" class="btn btn-outline-primary btn-sm">+ Patient</button>
+                <span id="activePatientBadge" class="badge rounded-pill bg-secondary">No patient selected</span>
+                {% endif %}
+
                 <label for="chatMode" class="form-label m-0">Mode</label>
                 <select id="chatMode" class="form-select form-select-sm" style="width:auto;">
                   <option value="real" selected>Real Actors</option>
@@ -172,6 +182,29 @@
                 <button type="button" id="resetBtn" class="btn btn-outline-danger btn-sm">Reset Conversation</button>
               </div>
             </div>
+
+            {% if "admin" in role_names or "clinician" in role_names %}
+            <div id="newPatientInlinePanel" class="card border-0 bg-light mb-3 p-2" style="display:none;">
+              <div class="d-flex align-items-end gap-2 flex-wrap">
+                <div>
+                  <label for="newPatientIdentifierInput" class="form-label mb-1">Patient Identifier</label>
+                  <input
+                    id="newPatientIdentifierInput"
+                    type="text"
+                    class="form-control form-control-sm"
+                    placeholder="e.g. P01"
+                    maxlength="64"
+                  >
+                </div>
+                <div class="d-flex gap-2">
+                  <button type="button" id="createPatientConfirmBtn" class="btn btn-primary btn-sm">Create</button>
+                  <button type="button" id="cancelCreatePatientBtn" class="btn btn-outline-secondary btn-sm">Cancel</button>
+                </div>
+              </div>
+              <small class="text-muted">Use a unique ID like P01, P02, etc.</small>
+              <div id="newPatientError" class="alert alert-danger d-none mt-2 mb-0" role="alert"></div>
+            </div>
+            {% endif %}
 
             <div class="alert p-2 mb-3 mode-tip" role="alert">
               <i class="fas fa-info-circle me-2"></i>

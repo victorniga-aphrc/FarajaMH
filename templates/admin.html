@@ -6,7 +6,7 @@
     <div class="d-flex align-items-end justify-content-between flex-wrap gap-2 mt-3 mb-2">
       <div>
         <h2 class="mb-0">Admin Dashboard</h2>
-        <div class="text-muted small">Welcome, {{ current_user.display_name if current_user.display_name else current_user.email }}</div>
+        <div class="text-muted small">Welcome, {{ current_user.display_name }}</div>
       </div>
       <div class="d-flex align-items-center gap-2">
         <a href="{{ url_for('misc_bp.history_page') }}" class="btn btn-sm btn-outline-secondary">History</a>
@@ -66,7 +66,7 @@
       <div class="card-header bg-white"><strong>Top Clinicians by Conversations</strong></div>
       <div class="card-body p-0">
         <table class="table table-sm align-middle mb-0" id="tbl-clinicians">
-          <thead class="table-light"><tr><th>Email</th><th>Conversations</th></tr></thead>
+          <thead class="table-light"><tr><th>Clinician</th><th>Conversations</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>

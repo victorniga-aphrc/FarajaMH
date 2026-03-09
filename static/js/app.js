@@ -140,6 +140,171 @@ async function logout() {
   });
   return r.json();
 }
+
+window.ACTIVE_PATIENT_ID = window.ACTIVE_PATIENT_ID || null;
+
+async function fetchPatients() {
+  const r = await fetch('/api/patients', { credentials: 'same-origin' });
+  return r.json();
+}
+
+async function fetchCurrentPatient() {
+  const r = await fetch('/api/current-patient', { credentials: 'same-origin' });
+  return r.json();
+}
+
+async function createPatientIdentifier(identifier) {
+  const r = await fetch('/api/patients', {
+    method: 'POST',
+    headers: authHeaders(),
+    credentials: 'same-origin',
+    body: JSON.stringify({ identifier })
+  });
+  return r.json();
+}
+
+async function selectPatient(patientId) {
+  const r = await fetch('/api/select-patient', {
+    method: 'POST',
+    headers: authHeaders(),
+    credentials: 'same-origin',
+    body: JSON.stringify({ patient_id: Number(patientId), continue_latest: true })
+  });
+  return r.json();
+}
+
+function renderPatientBadge() {
+  const badge = $('activePatientBadge');
+  const select = $('patientSelect');
+  if (!badge) return;
+  const option = select?.options?.[select.selectedIndex];
+  if (window.ACTIVE_PATIENT_ID && option && option.value) {
+    badge.textContent = `Patient: ${option.text}`;
+    badge.classList.remove('bg-secondary');
+    badge.classList.add('bg-primary');
+  } else {
+    badge.textContent = 'No patient selected';
+    badge.classList.remove('bg-primary');
+    badge.classList.add('bg-secondary');
+  }
+}
+
+async function initPatientContext(user) {
+  const hasScopedRole = !!(user?.roles || []).some(r => r === 'admin' || r === 'clinician');
+  const select = $('patientSelect');
+  const addBtn = $('newPatientBtn');
+  const inlinePanel = $('newPatientInlinePanel');
+  const patientInput = $('newPatientIdentifierInput');
+  const cancelCreatePatientBtn = $('cancelCreatePatientBtn');
+  const createPatientConfirmBtn = $('createPatientConfirmBtn');
+  const newPatientError = $('newPatientError');
+  if (!hasScopedRole || !select) return;
+
+  async function refreshPatientList() {
+    const list = await fetchPatients();
+    if (!list.ok) return [];
+    const patients = list.patients || [];
+    const currentSelected = select.value || (window.ACTIVE_PATIENT_ID ? String(window.ACTIVE_PATIENT_ID) : '');
+    select.innerHTML = '<option value="">Select patient</option>' +
+      patients.map(p => `<option value="${p.id}">${p.identifier}</option>`).join('');
+    if (currentSelected && patients.some(p => String(p.id) === String(currentSelected))) {
+      select.value = String(currentSelected);
+    }
+    return patients;
+  }
+
+  await refreshPatientList();
+  const cur = await fetchCurrentPatient();
+  if (cur.ok && cur.patient?.id) {
+    window.ACTIVE_PATIENT_ID = cur.patient.id;
+    select.value = String(cur.patient.id);
+  } else {
+    window.ACTIVE_PATIENT_ID = null;
+  }
+  renderPatientBadge();
+
+  if (!select.dataset.boundPatientContext) {
+    select.dataset.boundPatientContext = '1';
+    on(select, 'change', async () => {
+      const pid = select.value;
+      if (!pid) {
+        window.ACTIVE_PATIENT_ID = null;
+        renderPatientBadge();
+        return;
+      }
+      const out = await selectPatient(pid);
+      if (!out.ok) { alert(out.error || 'Failed to select patient'); return; }
+      window.ACTIVE_PATIENT_ID = Number(pid);
+      renderPatientBadge();
+      try { await window.resetConversationAndUI?.(); } catch (_) {}
+    });
+  }
+
+  if (addBtn && !addBtn.dataset.boundPatientContext) {
+    addBtn.dataset.boundPatientContext = '1';
+    on(addBtn, 'click', async () => {
+      if (newPatientError) {
+        newPatientError.classList.add('d-none');
+        newPatientError.textContent = '';
+      }
+      if (patientInput) patientInput.value = '';
+      if (inlinePanel) inlinePanel.style.display = '';
+      if (patientInput) patientInput.focus();
+    });
+  }
+
+  if (cancelCreatePatientBtn && !cancelCreatePatientBtn.dataset.boundPatientContext) {
+    cancelCreatePatientBtn.dataset.boundPatientContext = '1';
+    on(cancelCreatePatientBtn, 'click', () => {
+      if (inlinePanel) inlinePanel.style.display = 'none';
+      if (newPatientError) {
+        newPatientError.classList.add('d-none');
+        newPatientError.textContent = '';
+      }
+      if (patientInput) patientInput.value = '';
+    });
+  }
+
+  if (createPatientConfirmBtn && !createPatientConfirmBtn.dataset.boundPatientContext) {
+    createPatientConfirmBtn.dataset.boundPatientContext = '1';
+    on(createPatientConfirmBtn, 'click', async () => {
+      const identifier = (patientInput?.value || '').trim().toUpperCase();
+      if (!identifier) {
+        if (newPatientError) {
+          newPatientError.textContent = 'Patient identifier is required.';
+          newPatientError.classList.remove('d-none');
+        }
+        return;
+      }
+
+      createPatientConfirmBtn.setAttribute('disabled', '');
+      try {
+        const out = await createPatientIdentifier(identifier);
+        if (!out.ok) {
+          if (newPatientError) {
+            newPatientError.textContent = out.error || 'Failed to create patient';
+            newPatientError.classList.remove('d-none');
+          }
+          return;
+        }
+        if (inlinePanel) inlinePanel.style.display = 'none';
+        await refreshPatientList();
+        if (out.patient?.id) {
+          select.value = String(out.patient.id);
+          const sel = await selectPatient(out.patient.id);
+          if (sel.ok) {
+            window.ACTIVE_PATIENT_ID = out.patient.id;
+            renderPatientBadge();
+            try { await window.resetConversationAndUI?.(); } catch (_) {}
+          }
+        }
+      } finally {
+        createPatientConfirmBtn.removeAttribute('disabled');
+      }
+    });
+  }
+}
+
 function showAuth() {
   $('auth-gate')?.setAttribute('style','');
   const app = $('app-wrapper'); if (app) app.style.display = 'none';
@@ -148,7 +313,10 @@ function showApp(user) {
   const gate = $('auth-gate'); if (gate) gate.style.display = 'none';
   const app  = $('app-wrapper'); if (app) app.style.display = '';
   const who  = $('whoami');
-  if (who) who.innerHTML = `Welcome <strong>${user?.email || user?.name || 'User'}</strong> - role: <strong>${(user?.roles || []).join(', ')}</strong>`;
+  if (who) {
+    const label = user?.display_name || user?.username || user?.name || 'User';
+    who.innerHTML = `Welcome <strong>${label}</strong> - role: <strong>${(user?.roles || []).join(', ')}</strong>`;
+  }
 }
 
 // ---------------------------------------------
@@ -165,8 +333,8 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (me.authenticated) {
       showApp(me.user);
       const roles = JSON.parse(sessionStorage.getItem('userRole') || '[]');
-      const email = sessionStorage.getItem('userEmail') || me.user.email;
-      adjustChatOptions({ roles, email });
+      adjustChatOptions({ roles });
+      await initPatientContext(me.user);
       if (footer) footer.style.display = '';
     } else {
       showAuth();
@@ -194,7 +362,6 @@ window.addEventListener('DOMContentLoaded', async () => {
         const isClinician = res.user.roles?.includes('clinician');
         const needsReset = res.user.reset_password;
         sessionStorage.setItem('userRole', JSON.stringify(res.user.roles));
-        sessionStorage.setItem('userEmail', res.user.email);
 
         if (isClinician && needsReset) {
           window.location.href = '/new-password';
@@ -486,6 +653,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const language = $("languageMode")?.value || "bilingual";
 
     if (!message) { alert("Please enter a message!"); return; }
+    if ($('patientSelect') && !window.ACTIVE_PATIENT_ID) { alert("Select a patient before starting conversation."); return; }
 
     typingIndicator && (typingIndicator.style.display = "block");
 
@@ -654,6 +822,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function startLive() {
     if (liveActive) return;
+    if ($('patientSelect') && !window.ACTIVE_PATIENT_ID) {
+      alert('Select a patient before starting live conversation.');
+      return;
+    }
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         alert('Your browser does not support audio recording. Please use a modern browser or enable HTTPS.');
@@ -976,7 +1148,12 @@ function adjustChatOptions(user) {
 
   if (!chatModeSelect) return;
 
-  if (user?.roles?.includes('patient')) {
+  const roles = user?.roles || [];
+  const isAdmin = roles.includes('admin');
+  const isClinician = roles.includes('clinician');
+  const isPatient = roles.includes('patient');
+
+  if (isPatient && !isAdmin && !isClinician) {
     window.APP_FORCED.mode = 'simulated';
     window.APP_FORCED.role = 'patient';
 
@@ -1004,7 +1181,7 @@ function adjustChatOptions(user) {
 
     try { chatModeSelect.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
   }
-  else if (user?.roles?.includes('clinician')) {
+  else if (isClinician && !isAdmin) {
     // Clinician: default to live mic
     chatModeSelect.style.display = 'none';
     if (modeBadge) modeBadge.textContent = 'Live Mic';

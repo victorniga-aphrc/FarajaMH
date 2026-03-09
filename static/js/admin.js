@@ -30,6 +30,24 @@ async function deleteJSON(url) {
   return data;
 }
 
+async function putJSON(url, payload) {
+  const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") || "";
+  const r = await fetch(url, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      ...(csrf ? { "X-CSRFToken": csrf } : {})
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || data.ok === false) {
+    throw new Error(data.error || `HTTP ${r.status}`);
+  }
+  return data;
+}
+
 function fmtDateTime(iso) {
   try { return new Date(iso).toLocaleString(); } catch { return iso || ''; }
 }
@@ -67,7 +85,7 @@ function renderTopCliniciansTable(sum) {
   tbodyClin.innerHTML = '';
   (sum.series?.top_clinicians || []).forEach(row => {
     const tr = document.createElement('tr');
-    const label = row.display_name ? `${row.display_name} (${row.email})` : row.email;
+    const label = row.display_name || row.email || '-';
     tr.innerHTML = `<td>${escapeHtml(label)}</td><td>${row.count}</td>`;
     tbodyClin.appendChild(tr);
   });
@@ -78,10 +96,7 @@ function renderConversationRows(conversations) {
   const tbody = document.querySelector('#tbl-convos tbody');
   if (!tbody) return;
   conversations.forEach(c => {
-    const ownerTxt = c.owner_email
-      ? (c.owner_display_name ? `${c.owner_display_name} (${c.owner_email})` : c.owner_email)
-      : (c.owner_user_id != null ? String(c.owner_user_id)
-      : (c.owner ?? '-'));
+    const ownerTxt = c.owner_display_name || c.owner || (c.owner_user_id != null ? `User ${String(c.owner_user_id)}` : '-');
 
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -484,6 +499,79 @@ if (form) {
       }
       // Optionally reload CSRF token if needed
       await loadCsrf();
+    }
+  });
+}
+
+const editUserModalEl = document.getElementById("editUserModal");
+const editUserForm = document.getElementById("editUserForm");
+
+if (editUserModalEl && editUserForm) {
+  let editModal = null;
+  const getModal = () => {
+    if (!editModal && window.bootstrap?.Modal) {
+      editModal = new window.bootstrap.Modal(editUserModalEl);
+    }
+    return editModal;
+  };
+
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest(".edit-user-btn");
+    if (!btn) return;
+    const role = btn.getAttribute("data-role") || "";
+
+    document.getElementById("editUserId").value = btn.getAttribute("data-user-id") || "";
+    document.getElementById("editUserRole").value = role;
+    document.getElementById("editUserName").value = btn.getAttribute("data-name") || "";
+    document.getElementById("editUsername").value = btn.getAttribute("data-username") || "";
+    document.getElementById("editUserEmail").value = btn.getAttribute("data-email") || "";
+    document.getElementById("editUserPassword").value = "";
+    document.getElementById("editInstitutionSelect").value = btn.getAttribute("data-institution-id") || "";
+    document.getElementById("editNewInstitution").value = "";
+
+    const wrap = document.getElementById("editInstitutionWrap");
+    if (wrap) wrap.style.display = role === "clinician" ? "" : "none";
+
+    const err = document.getElementById("edit-user-error");
+    if (err) {
+      err.classList.add("d-none");
+      err.textContent = "";
+    }
+    const modal = getModal();
+    if (modal) {
+      modal.show();
+    } else {
+      // Fallback: show modal markup even if Bootstrap JS is unavailable.
+      editUserModalEl.classList.add("show");
+      editUserModalEl.style.display = "block";
+      editUserModalEl.removeAttribute("aria-hidden");
+    }
+  });
+
+  editUserForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const userId = document.getElementById("editUserId").value;
+    const role = document.getElementById("editUserRole").value;
+    const payload = {
+      name: document.getElementById("editUserName").value.trim(),
+      username: document.getElementById("editUsername").value.trim(),
+      email: document.getElementById("editUserEmail").value.trim().toLowerCase(),
+      password: document.getElementById("editUserPassword").value.trim(),
+    };
+    if (role === "clinician") {
+      payload.institution_id = document.getElementById("editInstitutionSelect").value || null;
+      payload.new_institution = document.getElementById("editNewInstitution").value.trim();
+    }
+
+    try {
+      await putJSON(`/admin/api/users/${encodeURIComponent(userId)}`, payload);
+      window.location.reload();
+    } catch (err) {
+      const el = document.getElementById("edit-user-error");
+      if (el) {
+        el.textContent = err.message || "Failed to update user";
+        el.classList.remove("d-none");
+      }
     }
   });
 }

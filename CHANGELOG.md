@@ -100,4 +100,55 @@ All notable changes to the Mental Health Screening App (FarajaMH) are documented
 
 ---
 
+## [Unreleased] – Username privacy, User Management, run behavior
+
+### Username and email privacy
+
+- **Display**
+  - Navbar, dashboards, and app welcome text show **username** (or `display_name`) only; email is no longer shown on general pages.
+  - Email is visible only when a clinician views their own **Profile** (`/profile`) or when an admin views **User Management** (admins and clinicians tables).
+- **Profile**
+  - New route `GET /profile` and template `templates/profile.html` for clinicians and admins to view their own details (username, name, email, roles). Email is shown here only for the signed-in user.
+- **Backfill**
+  - Seed/init in `models.py` sets usernames for existing seeded users: `admin@gmail.com` → `admin`, `doctor1@gmail.com` → `doctor1`. Runs on app init.
+
+### User Management (formerly Clinicians page)
+
+- **Page**
+  - Renamed to **User Management** in nav and page title. Split into two sections: **Admins** and **Clinicians** (clinicians list excludes users who have the admin role).
+- **Add clinician**
+  - **Username** is required and must be unique.
+  - **Password** is required (admin-specified, min 8 characters). New clinician can log in immediately with this password; no temporary-password or forced reset flow.
+  - Optional email notification still sent; wording updated to “Your account is ready. Kindly use your assigned password to log in.”
+- **Edit user (admin only)**
+  - New API `PUT /admin/api/users/<user_id>` to update any user: name, username, email, optional new password, and (for clinicians) institution.
+  - User Management tables have an **Edit** button per row; modal form for admins and clinicians with optional “New password” field. Username/email uniqueness enforced.
+- **UI**
+  - Edit modal uses lazy Bootstrap Modal init and script moved to `extra_js` so the Edit button works reliably after page load.
+
+### Admin dashboard: conversation owner display
+
+- **Conversations table**
+  - Owner column shows **username** (or display name) only; email is no longer displayed in the dashboard conversations list or in the API payload for that column (`owner_email` no longer returned).
+
+### App run and Live Mic
+
+- **Single run path**
+  - `python app.py` now always starts the app with **gunicorn + gevent** (when gunicorn is available), so Live Mic / WebSocket (STT) works by default. Fallback to Flask dev server if gunicorn is not installed.
+  - `run_with_websocket.py` invokes the same startup path; both entry points behave identically. All app modes (Real Actors, Simulated, Live) remain available.
+
+### Symptoms word cloud (clinician scope)
+
+- **Behavior**
+  - `GET /admin/api/symptoms` is already scoped by role: clinicians see symptom counts and word cloud only for **their own** conversations; admins see global. No code change; confirmed implemented.
+
+### Files touched (this round)
+
+- **Backend:** `admin.py` (add clinician password, edit user API, conversations owner display), `models.py` (username backfill), `app_pkg/routes/misc.py` (profile route, clinicians page query split), `auth.py` (user payload), `create_admin.py`, `insert_admin_direct_to_db_in_container.py`
+- **Templates:** `templates/base.html`, `templates/admin.html`, `templates/clinicians.html`, `templates/clinician_dashboard.html`, `templates/profile.html` (new)
+- **Frontend:** `static/js/admin.js` (conversations owner display, edit user modal + PUT, add clinician form), `static/js/app.js` (display_name in welcome, no email in session for display)
+- **App entry:** `app.py` (gunicorn+gevent as default), `run_with_websocket.py` (thin wrapper)
+
+---
+
 *Format inspired by [Keep a Changelog](https://keepachangelog.com/).*

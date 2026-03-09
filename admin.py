@@ -223,7 +223,6 @@ def summary():
             # ADMIN ONLY
             top_clinicians = (
                 db.query(
-                    User.email,
                     User.username,
                     User.name,
                     func.count(Conversation.id).label("count")
@@ -232,7 +231,7 @@ def summary():
                 .join(user_roles, user_roles.c.user_id == User.id)
                 .join(Role, Role.id == user_roles.c.role_id)
                 .filter(Role.name == "clinician")
-                .group_by(User.email, User.username, User.name)
+                .group_by(User.username, User.name)
                 .order_by(desc("count"))
                 .limit(10)
                 .all()
@@ -257,8 +256,8 @@ def summary():
                     [str(d), c] for d, c in convs_per_day
                 ],
                 "top_clinicians": [
-                {"email": email, "display_name": _display_name(username, name, email), "count": count}
-                for email, username, name, count in top_clinicians
+                {"display_name": _display_name(username, name, None), "count": count}
+                for username, name, count in top_clinicians
                 ]
             },
         })
@@ -333,8 +332,8 @@ def conversations():
         convs = [{
             "id": cid,
             "created_at": created.isoformat(),
-            "owner": (username or name or email or (str(owner_id) if owner_id else None)),
-            "owner_email": email,
+            "owner": (username or name or (email.split("@")[0] if email else None) or (str(owner_id) if owner_id else None)),
+            "owner_email": None,
             "owner_display_name": (username or name or (email.split("@")[0] if email else None)),
             "owner_user_id": owner_id,
         } for (cid, created, email, username, name, owner_id) in rows]
@@ -599,11 +598,6 @@ def delete_conversation(cid):
     return jsonify({"ok": True, "conversation_id": cid})
 
 
-def generate_temp_password(length=10):
-    chars = string.ascii_letters + string.digits + "!@#$%^&*"
-    return "".join(random.choice(chars) for _ in range(length))
-
-
 @admin_bp.post("/api/clinicians/add")
 @login_required
 def add_clinician():
@@ -614,7 +608,9 @@ def add_clinician():
     db = SessionLocal()
     try:
         name = (data.get("name") or "").strip()
+        username = (data.get("username") or "").strip()
         email = (data.get("email") or "").strip().lower()
+        password = (data.get("password") or "").strip()
         institution_id = data.get("institution_id") or None
         new_institution_name = data.get("new_institution") or None
 
@@ -625,12 +621,16 @@ def add_clinician():
             if inst:
                 institution_name = inst.name
 
-        if not name or not email or not institution_name:
-            return jsonify({"ok": False, "error": "All fields are required"}), 400
+        if not name or not username or not email or not password or not institution_name:
+            return jsonify({"ok": False, "error": "Name, username, email, password, and institution are required"}), 400
+        if len(password) < 8:
+            return jsonify({"ok": False, "error": "Password must be at least 8 characters"}), 400
 
         # Check if user exists
         if db.query(User).filter_by(email=email).first():
             return jsonify({"ok": False, "error": "User Email already registered"}), 409
+        if db.query(User).filter_by(username=username).first():
+            return jsonify({"ok": False, "error": "Username already in use"}), 409
 
         # Find or create institution
         inst = db.query(Institution).filter(func.lower(Institution.name) == institution_name.lower()).first()
@@ -640,16 +640,15 @@ def add_clinician():
             db.commit()
             db.refresh(inst)
 
-        # Create user with temp password
-        temp_password = generate_temp_password()
+        # Create user with admin-provided password
         user = User(
             email=email,
-            username=_generate_unique_username(db, name or email.split("@")[0]),
-            password_hash=hash_password(temp_password),
+            username=username,
+            password_hash=hash_password(password),
             name=name,
             is_active=True,
             institution_id=inst.id,
-            reset_password=True
+            reset_password=False
         )
         db.add(user)
         db.commit()
@@ -663,7 +662,7 @@ def add_clinician():
         subject="Onboarding into MHS Application",
         html_file_name="email_template.html",
         placeholders={
-            "message": "Kindly use this temporary password: " + temp_password}
+            "message": "Your account is ready. Kindly use your assigned password to log in."}
         )
 
         return jsonify({
@@ -671,9 +670,73 @@ def add_clinician():
             "clinician": {
                 "id": user.id,
                 "name": user.name,
+                "username": user.username,
                 "email": user.email,
                 "institution": inst.name,
             }
         })
+    finally:
+        db.close()
+
+
+@admin_bp.put("/api/users/<int:user_id>")
+@login_required
+def update_user(user_id: int):
+    if not _require_admin():
+        return admin_guard()
+
+    data = request.get_json(force=True) or {}
+    db = SessionLocal()
+    try:
+        user = db.get(User, user_id)
+        if not user:
+            return jsonify({"ok": False, "error": "User not found"}), 404
+
+        name = (data.get("name") or "").strip()
+        username = (data.get("username") or "").strip()
+        email = (data.get("email") or "").strip().lower()
+        password = (data.get("password") or "").strip()
+        institution_id = data.get("institution_id")
+        new_institution = (data.get("new_institution") or "").strip()
+
+        if not username or not email:
+            return jsonify({"ok": False, "error": "Username and email are required"}), 400
+
+        existing_email = db.query(User).filter(User.email == email, User.id != user.id).first()
+        if existing_email:
+            return jsonify({"ok": False, "error": "Email already in use"}), 409
+
+        existing_username = db.query(User).filter(User.username == username, User.id != user.id).first()
+        if existing_username:
+            return jsonify({"ok": False, "error": "Username already in use"}), 409
+
+        user.name = name or None
+        user.username = username
+        user.email = email
+
+        is_clinician = any(r.name == "clinician" for r in user.roles)
+        if is_clinician:
+            inst = None
+            if new_institution:
+                inst = db.query(Institution).filter(func.lower(Institution.name) == new_institution.lower()).first()
+                if not inst:
+                    inst = Institution(name=new_institution)
+                    db.add(inst)
+                    db.flush()
+            elif institution_id:
+                inst = db.query(Institution).filter_by(id=institution_id).first()
+
+            if inst:
+                user.institution_id = inst.id
+
+        if password:
+            if len(password) < 8:
+                return jsonify({"ok": False, "error": "Password must be at least 8 characters"}), 400
+            user.password_hash = hash_password(password)
+            user.reset_password = False
+            user.is_active = True
+
+        db.commit()
+        return jsonify({"ok": True})
     finally:
         db.close()
