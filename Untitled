@@ -1,0 +1,3 @@
+ERROR:crewai.telemetry.telemetry:HTTPSConnectionPool(host='telemetry.crewai.com', port=4319): Read timed out. (read timeout=29.999995231628418)
+/mnt/d/aphrc/FarajaMH/admin.py:187: SAWarning: Coercing Subquery object into a select() for use in IN(); please pass a select() construct explicitly
+  Message.conversation_id.in_(conv_ids_subq)

@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+  <div class="row mb-4">
+    <div class="col-lg-8 mx-auto text-center">
+      <h1 class="display-5 text-primary mb-3">
+        <i class="fas fa-user-md"></i> Clinicians
+      </h1>
+      <p class="lead text-muted">
+        View all clinicians and add new ones.
+      </p>
+    </div>
+  </div>
+
+<!-- Clinicians list -->
+<div class="row mb-4">
+  <div class="col-lg-10 mx-auto">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h4 class="mb-3">Clinicians List</h4>
+        <table class="table table-striped">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Institution</th>
+              <!-- <th>Actions</th>  new column -->
+            </tr>
+          </thead>
+          <tbody>
+            {% for clinician in clinicians %}
+            <tr>
+              <td>{{ clinician.name }}</td>
+              <td>{{ clinician.email }}</td>
+              <td>{{ clinician.institution.name }}</td>
+              <!-- Edit icon 
+              <td>
+                
+                <a href="#" class="text-primary me-2" data-id="{{ clinician.id }}" title="Edit">
+                  <i class="fas fa-edit"></i>
+                </a>
+                <a href="#" class="text-danger" data-id="{{ clinician.id }}" title="Delete">
+                  <i class="fas fa-trash-alt"></i>
+                </a>
+              </td>
+            </tr>
+            -->
+            {% else %}
+            <tr>
+              <td colspan="4" class="text-center text-muted">No clinicians found.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+  <!-- Toggle button for form -->
+  <div class="row mb-3">
+    <div class="col-lg-8 mx-auto text-center">
+  <button id="toggleFormBtn" class="btn btn-primary">
+    <i id="toggleIcon" class="fas fa-chevron-down me-1"></i> New Clinician
+  </button>
+    </div>
+  </div>
+
+  <!-- Add new clinician form (hidden initially) -->
+  <div class="row mb-4" id="clinicianFormContainer" style="display: none;">
+    <div class="col-lg-8 mx-auto">
+      <div class="card shadow-sm">
+        <div id="auth-error" class="alert alert-danger d-none" role="alert"></div>
+        <div class="card-body">
+          <h4 class="mb-3">Add New Clinician</h4>
+          <form id="addClinicianForm" data-url="{{ url_for('admin.add_clinician') }}">
+            <div class="mb-3">
+              <label for="clinicianName" class="form-label">Full Name</label>
+              <input type="text" class="form-control" id="clinicianName" name="name" required>
+            </div>
+            <div class="mb-3">
+              <label for="clinicianEmail" class="form-label">Email</label>
+              <input type="email" class="form-control" id="clinicianEmail" name="email" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Institution</label>
+              <select class="form-select mb-2" name="institution_id" id="institutionSelect">
+                <option value="">Select existing institution</option>
+                {% for inst in institutions %}
+                <option value="{{ inst.id }}">{{ inst.name }}</option>
+                {% endfor %}
+              </select>
+              <input type="text" class="form-control" name="new_institution" id="newInstitution" placeholder="Or type new institution">
+            </div>
+            <button type="submit" class="btn btn-success">Add Clinician</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Scripts -->
+<script src="{{ url_for('static', filename='js/admin.js') }}"></script>
+{% endblock %}
